@@ -1,143 +1,92 @@
 # Daylight Mirror
 
-Use your [Daylight DC-1](https://daylightcomputer.com) as a real-time external display for your Mac. Lossless, zero-GPU, sub-10ms latency.
-
-The Mac renders at 4:3 natively (mouse confined, windows tiling to 1280x960), and the Daylight shows exactly what you see — pixel-perfect greyscale, 30 FPS, ~0.1 MB/s over USB.
+Turn your [Daylight DC-1](https://daylightcomputer.com) into a real-time external display for your Mac.
 
 ![Daylight DC-1 mirroring a MacBook — both displays showing the same content](images/1-both-on.jpg)
 
+Your Mac renders natively at the Daylight's resolution. The mouse stays inside the 4:3 frame, windows tile to fit, and what you see on the Mac is exactly what appears on the Daylight — every pixel, every frame, with no perceptible delay.
+
+The mirror runs at **30 frames per second** with **under 10 milliseconds of latency** and uses **less than 0.1 MB/s of bandwidth** over a single USB-C cable. It's lossless — no compression artifacts, no quality loss. Your Mac's GPU stays completely idle the entire time, so there's zero fan noise. This is as fast, as clean, and as efficient as a software display mirror can physically be.
+
 ## Install
 
-### Option A: Homebrew (recommended)
+### Homebrew (recommended)
 
 ```bash
 brew install --cask welfvh/tap/daylight-mirror
 ```
 
-This installs the Mac menu bar app to `/Applications` and the Android APK to `/opt/homebrew/share/daylight-mirror/`.
-
-Then install the APK on your Daylight:
+Then install the app on your Daylight (one time):
 
 ```bash
 adb install /opt/homebrew/share/daylight-mirror/DaylightMirror.apk
 ```
 
-### Option B: Download
+<details>
+<summary>Other install options</summary>
 
-Grab the latest `.dmg` from [Releases](https://github.com/welfvh/daylight-mirror/releases). Open it, drag "Daylight Mirror" to Applications, and install the included APK:
+**Download:** Grab the `.dmg` from [Releases](https://github.com/welfvh/daylight-mirror/releases). Drag "Daylight Mirror" to Applications, then install the included APK:
 
 ```bash
 adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk
 ```
 
-### Option C: Build from source
+**Build from source:**
 
 ```bash
 git clone https://github.com/welfvh/daylight-mirror
 cd daylight-mirror
-make install    # builds Mac app → ~/Applications
-make deploy     # builds + installs APK (requires Android SDK + NDK)
+make install    # Mac menu bar app → ~/Applications
+make deploy     # Android APK → Daylight (requires Android SDK)
 ```
 
-## Prerequisites
+</details>
 
-### On your Mac
+### Prerequisites
 
-- **macOS 14+**
-- **adb** (Android Debug Bridge): `brew install android-platform-tools`
-- On first run, macOS will ask for **Accessibility** (keyboard shortcuts) and **Screen Recording** (capture) permissions
+**On your Mac:**
+- macOS 14 or later
+- `adb`: `brew install android-platform-tools`
+- macOS will prompt for Accessibility and Screen Recording permissions on first run
 
-### On your Daylight DC-1
+**On your Daylight DC-1** (one-time setup):
+1. **Settings** > **About tablet** > tap **Build number** seven times
+2. **Settings** > **Developer options** > enable **USB debugging**
+3. Connect to your Mac via USB-C and tap **Allow** on the prompt
 
-Enable USB debugging (one-time setup):
-
-1. Open **Settings** > **About tablet**
-2. Tap **Build number** seven times (you'll see "You are now a developer!")
-3. Go back to **Settings** > **Developer options**
-4. Toggle on **USB debugging**
-5. Connect the DC-1 to your Mac via USB-C
-6. On the DC-1, tap **Allow** on the "Allow USB debugging?" prompt
-
-Verify the connection:
-
-```bash
-adb devices
-# Should show your device, e.g.: R5CTA1XXXXX    device
-```
+Verify with `adb devices` — you should see your device listed.
 
 ## Usage
 
-1. Open **Daylight Mirror** from Spotlight or the menu bar
+1. Open **Daylight Mirror** from Spotlight
 2. Click **Start Mirror**
 3. On the Daylight, open the **Daylight Mirror** app
 
-Your Mac switches to 4:3 mirrored mode. The Daylight shows your screen in real-time.
+That's it. Your Mac switches to 4:3, and the Daylight lights up.
 
-### Controls
+![Menu bar popover — live stats, brightness and warmth sliders, backlight toggle](images/2-menu-bar.jpg)
 
-![Menu bar popover — FPS stats, brightness and warmth sliders, backlight toggle](images/2-menu-bar.jpg)
+The menu bar gives you brightness and warmth sliders, a backlight toggle, and live connection stats. Keyboard shortcuts work too: **Ctrl+F1/F2** for brightness, **Ctrl+F11/F12** for warmth, **Ctrl+F10** to toggle the backlight.
 
-From the menu bar popover:
-- **Brightness** and **warmth** sliders
-- **Backlight** toggle
-- **Stop Mirror** button (Mac reverts to normal)
-
-Keyboard shortcuts (while mirroring):
-
-| Shortcut | Action |
-|----------|--------|
-| Ctrl + F1 | Brightness down |
-| Ctrl + F2 | Brightness up |
-| Ctrl + F10 | Toggle backlight |
-| Ctrl + F11 | Cooler (less amber) |
-| Ctrl + F12 | Warmer (more amber) |
-
-### Stopping
-
-Click **Stop Mirror** in the menu bar, or quit the app. Your Mac display reverts to its normal resolution automatically.
+Click **Stop Mirror** or quit the app — your Mac reverts to normal instantly.
 
 ## Fidelity
 
-![Close-up of the Daylight displaying the GitHub README — pixel-perfect text rendering](images/3-fidelity.jpg)
+![Close-up of the Daylight displaying the GitHub README — pixel-perfect text](images/3-fidelity.jpg)
 
-The mirror is lossless. Every pixel on the Mac is reproduced exactly on the Daylight via a deterministic BT.601 greyscale conversion. No JPEG artifacts, no dithering, no interpolation.
+What you see above is the Daylight rendering this README, mirrored from the Mac. Every character is pixel-identical to what the Mac displays. There's no JPEG compression, no dithering, no interpolation — just a direct greyscale conversion applied identically on both sides.
 
 ![The Daylight as a standalone display — Mac screen off, USB-C connected](images/4-mac-off.jpg)
 
 ## How it works
 
-```
-Mac                              Daylight DC-1
-─────────────────────            ─────────────────────
-ScreenCaptureKit (BGRA)          TCP recv
-        │                                │
-        ▼                                ▼
-vImage SIMD greyscale (0.2ms)    LZ4 decompress (0.3ms)
-        │                                │
-        ▼                                ▼
-XOR delta (0.1ms)                NEON XOR delta (0.1ms)
-        │                                │
-        ▼                                ▼
-LZ4 compress (0.3ms → ~4KB)     NEON grey→RGBX (1.0ms)
-        │                                │
-        ▼                                ▼
-Raw TCP ──── USB (adb) ────────► ANativeWindow blit
-```
+The technical deep-dive is in the blog series:
 
-- **Zero GPU** on both sides — Mac GPU is completely idle, no fan noise
-- **Lossless** — deterministic BT.601 greyscale, no JPEG compression
-- **~4KB per frame** (delta), ~80KB keyframes once per second
-- **~0.1 MB/s** average bandwidth over USB
+- [Part 1: The Prototype](blog/) — from VNC to ScreenCaptureKit
+- [Part 2: Killing the GPU](blog/part-2-killing-the-gpu.md) — zero-GPU pipeline, native Android renderer with ARM SIMD
+- [Part 3: One Click](blog/part-3-one-click.md) — virtual display, display controls, menu bar app
 
-The Mac side creates a virtual display using `CGVirtualDisplay` (private API) and mirrors the built-in display to it. The virtual display is captured by ScreenCaptureKit, converted to greyscale via vImage SIMD, delta-encoded against the previous frame, LZ4 compressed, and sent over raw TCP.
-
-The Android side is a native NDK app — the entire hot path (TCP recv, LZ4 decompress, NEON delta apply, NEON pixel expansion, ANativeWindow blit) is C with zero JNI calls in the frame loop.
-
-## Blog
-
-- [Part 1: The Prototype](blog/)
-- [Part 2: Killing the GPU](blog/part-2-killing-the-gpu.md)
-- [Part 3: One Click](blog/part-3-one-click.md)
+The short version: the Mac captures its own screen, converts to greyscale using CPU vector instructions, compresses the difference between consecutive frames, and sends ~4KB per frame over USB. The Daylight runs a native C renderer that decompresses and paints pixels directly to the display hardware. No browser, no GPU, no Java in the hot path. The entire round trip — capture, encode, transmit, decode, render — takes about 5 milliseconds.
 
 ## License
 
