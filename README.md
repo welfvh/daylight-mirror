@@ -4,6 +4,8 @@ Use your [Daylight DC-1](https://daylightcomputer.com) as a real-time external d
 
 The Mac renders at 4:3 natively (mouse confined, windows tiling to 1280x960), and the Daylight shows exactly what you see — pixel-perfect greyscale, 30 FPS, ~0.1 MB/s over USB.
 
+![Daylight DC-1 mirroring a MacBook — both displays showing the same content](images/1-both-on.jpg)
+
 ## Install
 
 ### Option A: Homebrew (recommended)
@@ -73,6 +75,8 @@ Your Mac switches to 4:3 mirrored mode. The Daylight shows your screen in real-t
 
 ### Controls
 
+![Menu bar popover — FPS stats, brightness and warmth sliders, backlight toggle](images/2-menu-bar.jpg)
+
 From the menu bar popover:
 - **Brightness** and **warmth** sliders
 - **Backlight** toggle
@@ -91,6 +95,14 @@ Keyboard shortcuts (while mirroring):
 ### Stopping
 
 Click **Stop Mirror** in the menu bar, or quit the app. Your Mac display reverts to its normal resolution automatically.
+
+## Fidelity
+
+![Close-up of the Daylight displaying the GitHub README — pixel-perfect text rendering](images/3-fidelity.jpg)
+
+The mirror is lossless. Every pixel on the Mac is reproduced exactly on the Daylight via a deterministic BT.601 greyscale conversion. No JPEG artifacts, no dithering, no interpolation.
+
+![The Daylight as a standalone display — Mac screen off, USB-C connected](images/4-mac-off.jpg)
 
 ## How it works
 
