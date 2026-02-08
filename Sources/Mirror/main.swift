@@ -42,6 +42,8 @@ class TCPServer {
     var connections: [NWConnection] = []
     let queue = DispatchQueue(label: "tcp-server")
     let lock = NSLock()
+    // Cached last keyframe — sent immediately to new clients (eliminates black flash)
+    var lastKeyframeData: Data?
 
     init(port: UInt16) throws {
         let params = NWParameters.tcp
@@ -75,7 +77,14 @@ class TCPServer {
             conn.start(queue: self.queue)
             self.lock.lock()
             self.connections.append(conn)
+            // Send cached keyframe immediately so client doesn't show black
+            let cachedKeyframe = self.lastKeyframeData
             self.lock.unlock()
+
+            if let kf = cachedKeyframe {
+                conn.send(content: kf, completion: .contentProcessed { _ in })
+                print("[TCP] Sent cached keyframe to new client (\(kf.count) bytes)")
+            }
 
             // Keep reading (client might send acks or commands)
             self.receiveLoop(conn)
@@ -104,6 +113,10 @@ class TCPServer {
         frame.append(payload)
 
         lock.lock()
+        // Cache keyframes for instant delivery to new clients
+        if isKeyframe {
+            lastKeyframeData = frame
+        }
         let conns = connections
         lock.unlock()
 
