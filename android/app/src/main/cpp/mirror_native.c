@@ -34,15 +34,19 @@
 #define MAX_COMPRESSED (PIXEL_COUNT + 256)
 
 // Protocol constants
-#define MAGIC_0 0xDA
-#define MAGIC_1 0x7E
+#define MAGIC_FRAME_0 0xDA
+#define MAGIC_FRAME_1 0x7E   // Frame packet: [DA 7E] [flags] [len:4] [payload]
+#define MAGIC_CMD_1   0x7F   // Command packet: [DA 7F] [cmd] [value]
 #define FLAG_KEYFRAME 0x01
 #define HEADER_SIZE 7
+#define CMD_BRIGHTNESS 0x01
 
 // Global state
 static ANativeWindow *g_window = NULL;
 static pthread_t g_thread;
 static volatile int g_running = 0;
+static JavaVM *g_jvm = NULL;
+static jobject g_activity = NULL;
 static char g_host[64] = "127.0.0.1";
 static int g_port = 8888;
 
@@ -176,21 +180,59 @@ static void *mirror_thread(void *arg) {
             struct timespec t0, t1, t2, t3, t4;
             clock_gettime(CLOCK_MONOTONIC, &t0);
 
-            // Read header: [magic:2][flags:1][length:4]
-            uint8_t header[HEADER_SIZE];
-            if (read_exact(sock, header, HEADER_SIZE) < 0) {
+            // Read first 2 bytes to determine packet type
+            uint8_t magic[2];
+            if (read_exact(sock, magic, 2) < 0) {
                 LOGE("Connection lost");
                 break;
             }
 
-            // Validate magic
-            if (header[0] != MAGIC_0 || header[1] != MAGIC_1) {
-                LOGE("Bad magic: 0x%02x 0x%02x", header[0], header[1]);
+            if (magic[0] != MAGIC_FRAME_0) {
+                LOGE("Bad magic: 0x%02x 0x%02x", magic[0], magic[1]);
                 break;
             }
 
-            uint8_t flags = header[2];
-            uint32_t payload_len = header[3] | (header[4] << 8) | (header[5] << 16) | (header[6] << 24);
+            // Command packet: [DA 7F] [cmd] [value]
+            if (magic[1] == MAGIC_CMD_1) {
+                uint8_t cmd_data[2];
+                if (read_exact(sock, cmd_data, 2) < 0) break;
+                if (g_jvm && g_activity) {
+                    JNIEnv *env;
+                    int attached = 0;
+                    if ((*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+                        (*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL);
+                        attached = 1;
+                    }
+                    jclass cls = (*env)->GetObjectClass(env, g_activity);
+                    if (cmd_data[0] == CMD_BRIGHTNESS) {
+                        jmethodID mid = (*env)->GetMethodID(env, cls, "setBrightness", "(I)V");
+                        if (mid) (*env)->CallVoidMethod(env, g_activity, mid, (jint)cmd_data[1]);
+                        LOGI("Brightness → %d/255", cmd_data[1]);
+                    } else if (cmd_data[0] == 0x02) {  // CMD_WARMTH
+                        jmethodID mid = (*env)->GetMethodID(env, cls, "setWarmth", "(I)V");
+                        if (mid) (*env)->CallVoidMethod(env, g_activity, mid, (jint)cmd_data[1]);
+                        LOGI("Warmth → %d/255", cmd_data[1]);
+                    }
+                    if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+                }
+                continue;
+            }
+
+            // Frame packet: [DA 7E] [flags:1] [length:4]
+            if (magic[1] != MAGIC_FRAME_1) {
+                LOGE("Unknown packet type: 0x%02x", magic[1]);
+                break;
+            }
+
+            // Read remaining frame header: [flags:1][length:4]
+            uint8_t frame_hdr[5];
+            if (read_exact(sock, frame_hdr, 5) < 0) {
+                LOGE("Connection lost reading frame header");
+                break;
+            }
+
+            uint8_t flags = frame_hdr[0];
+            uint32_t payload_len = frame_hdr[1] | (frame_hdr[2] << 8) | (frame_hdr[3] << 16) | (frame_hdr[4] << 24);
 
             if (payload_len > MAX_COMPRESSED) {
                 LOGE("Payload too large: %u", payload_len);
@@ -285,6 +327,10 @@ Java_com_daylight_mirror_MirrorActivity_nativeStart(
 {
     if (g_running) return;
 
+    // Store JVM and activity for brightness callbacks from mirror thread
+    (*env)->GetJavaVM(env, &g_jvm);
+    g_activity = (*env)->NewGlobalRef(env, thiz);
+
     g_window = ANativeWindow_fromSurface(env, surface);
     ANativeWindow_setBuffersGeometry(g_window, FRAME_W, FRAME_H, AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM);
 
@@ -307,5 +353,9 @@ Java_com_daylight_mirror_MirrorActivity_nativeStop(
     if (g_window) {
         ANativeWindow_release(g_window);
         g_window = NULL;
+    }
+    if (g_activity) {
+        (*env)->DeleteGlobalRef(env, g_activity);
+        g_activity = NULL;
     }
 }

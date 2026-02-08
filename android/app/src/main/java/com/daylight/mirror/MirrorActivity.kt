@@ -1,9 +1,11 @@
 // MirrorActivity — minimal Activity that creates a SurfaceView and hands it to native code.
 // All heavy lifting (socket, LZ4, delta, render) happens in C via JNI.
+// Also handles brightness commands from the Mac server (Ctrl+F1/F2).
 package com.daylight.mirror
 
 import android.app.Activity
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -48,6 +50,38 @@ class MirrorActivity : Activity() {
                 nativeStop()
             }
         })
+    }
+
+    /// Called from native code when a brightness command arrives.
+    /// Uses WindowManager for instant response — no WRITE_SETTINGS permission needed.
+    @Suppress("unused")
+    fun setBrightness(value: Int) {
+        val clamped = value.coerceIn(0, 255)
+        runOnUiThread {
+            val lp = window.attributes
+            lp.screenBrightness = clamped / 255f
+            window.attributes = lp
+        }
+    }
+
+    /// Called from native code when a warmth command arrives.
+    /// Sets the Daylight's custom amber backlight rate (0-1023).
+    /// Uses Runtime.exec("su") since this is a Daylight-specific protected setting.
+    @Suppress("unused")
+    fun setWarmth(value: Int) {
+        val amberRate = (value.coerceIn(0, 255) * 1023) / 255
+        // Settings.System.putInt doesn't work for amber_rate (protected setting).
+        // Use shell command instead — works without root on Daylight's custom Android.
+        Thread {
+            try {
+                val process = Runtime.getRuntime().exec(arrayOf(
+                    "sh", "-c", "settings put system screen_brightness_amber_rate $amberRate"
+                ))
+                process.waitFor()
+            } catch (e: Exception) {
+                android.util.Log.e("DaylightMirror", "Cannot set amber_rate: ${e.message}")
+            }
+        }.start()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
