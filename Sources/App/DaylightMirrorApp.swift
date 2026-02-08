@@ -219,17 +219,23 @@ struct MirrorMenuView: View {
 
         Divider()
 
-        // Brightness slider
+        // Brightness slider (quadratic curve with widened low-end zone)
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Image(systemName: "sun.min")
                     .font(.caption2)
                 Slider(
                     value: Binding(
-                        get: { Double(engine.brightness) },
-                        set: { engine.setBrightness(Int($0)) }
+                        get: {
+                            // brightness → slider position via sqrt
+                            if engine.brightness == 0 { return 0 }
+                            return sqrt(Double(engine.brightness) / 255.0)
+                        },
+                        set: { pos in
+                            engine.setBrightness(MirrorEngine.brightnessFromSliderPos(pos))
+                        }
                     ),
-                    in: 0...255
+                    in: 0...1
                 )
                 Image(systemName: "sun.max")
                     .font(.caption2)
@@ -266,8 +272,15 @@ struct MirrorMenuView: View {
 
         Divider()
 
-        // Restart / Stop
-        HStack(spacing: 8) {
+        // Reconnect / Restart / Stop
+        HStack(spacing: 6) {
+            Button(action: { engine.reconnect() }) {
+                Text("Reconnect")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
             Button(action: {
                 engine.stop()
                 Task { @MainActor in

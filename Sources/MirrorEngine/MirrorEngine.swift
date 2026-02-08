@@ -15,6 +15,7 @@ import Accelerate
 import CLZ4
 import CVirtualDisplay
 import AppKit
+import IOKit.graphics
 
 // MARK: - Configuration
 
@@ -151,6 +152,45 @@ struct ADBBridge {
         process.standardError = FileHandle.nullDevice
         try? process.run()
         print("[ADB] Launched Daylight Mirror on device")
+    }
+}
+
+// MARK: - Mac Brightness Control
+
+/// Controls the Mac's built-in display brightness via IOKit.
+/// Used to auto-dim the Mac when the Daylight is connected (no point lighting both screens).
+struct MacBrightness {
+    static func get() -> Float? {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault,
+              IOServiceMatching("IODisplayConnect"), &iterator) == kIOReturnSuccess else { return nil }
+        defer { IOObjectRelease(iterator) }
+
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            var brightness: Float = 0
+            let err = IODisplayGetFloatParameter(service, 0,
+                      kIODisplayBrightnessKey as CFString, &brightness)
+            IOObjectRelease(service)
+            if err == kIOReturnSuccess { return brightness }
+            service = IOIteratorNext(iterator)
+        }
+        return nil
+    }
+
+    static func set(_ value: Float) {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault,
+              IOServiceMatching("IODisplayConnect"), &iterator) == kIOReturnSuccess else { return }
+        defer { IOObjectRelease(iterator) }
+
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            IODisplaySetFloatParameter(service, 0,
+                kIODisplayBrightnessKey as CFString, value)
+            IOObjectRelease(service)
+            service = IOIteratorNext(iterator)
+        }
     }
 }
 
@@ -799,9 +839,14 @@ class DisplayController {
         if let m = systemMonitor { NSEvent.removeMonitor(m); systemMonitor = nil }
     }
 
+    /// Step brightness using the same quadratic curve as the slider.
+    /// Steps happen in slider-space (0–1) so they're tiny at low brightness, bigger at high.
     func adjustBrightness(by delta: Int) {
-        currentBrightness = max(0, min(255, currentBrightness + delta))
-        savedBrightness = currentBrightness
+        let pos = sqrt(Double(currentBrightness) / 255.0)
+        let step = 0.05 * Double(delta > 0 ? 1 : -1)
+        let newPos = max(0, min(1, pos + step))
+        currentBrightness = Self.brightnessFromSliderPos(newPos)
+        savedBrightness = max(currentBrightness, 1)
         backlightOn = currentBrightness > 0
         tcpServer.sendCommand(CMD_BRIGHTNESS, value: UInt8(currentBrightness))
         onBrightnessChanged?(currentBrightness)
@@ -811,11 +856,17 @@ class DisplayController {
 
     func setBrightness(_ value: Int) {
         currentBrightness = max(0, min(255, value))
-        savedBrightness = currentBrightness
+        savedBrightness = max(currentBrightness, 1)
         backlightOn = currentBrightness > 0
         tcpServer.sendCommand(CMD_BRIGHTNESS, value: UInt8(currentBrightness))
         onBrightnessChanged?(currentBrightness)
         onBacklightChanged?(backlightOn)
+    }
+
+    /// Quadratic curve with widened landing zone at the low end.
+    /// Shared with MirrorEngine.brightnessFromSliderPos (public API for the slider).
+    static func brightnessFromSliderPos(_ pos: Double) -> Int {
+        MirrorEngine.brightnessFromSliderPos(pos)
     }
 
     func adjustWarmth(by delta: Int) {
@@ -931,6 +982,7 @@ public class MirrorEngine: ObservableObject {
     private var httpServer: HTTPServer?
     private var capture: ScreenCapture?
     private var displayController: DisplayController?
+    private var savedMacBrightness: Float?   // Mac brightness before auto-dim
 
     public init() {
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
@@ -1025,7 +1077,25 @@ public class MirrorEngine: ObservableObject {
             tcp.frameWidth = UInt16(w)
             tcp.frameHeight = UInt16(h)
             tcp.onClientCountChanged = { [weak self] count in
-                DispatchQueue.main.async { self?.clientCount = count }
+                DispatchQueue.main.async {
+                    let wasConnected = (self?.clientCount ?? 0) > 0
+                    self?.clientCount = count
+
+                    // Auto-dim Mac when Daylight connects, restore when it disconnects
+                    if count > 0 && !wasConnected {
+                        if let current = MacBrightness.get() {
+                            self?.savedMacBrightness = current
+                            MacBrightness.set(0)
+                            print("[Mac] Auto-dimmed (was \(current))")
+                        }
+                    } else if count == 0 && wasConnected {
+                        if let saved = self?.savedMacBrightness {
+                            MacBrightness.set(saved)
+                            self?.savedMacBrightness = nil
+                            print("[Mac] Brightness restored to \(saved)")
+                        }
+                    }
+                }
             }
             tcp.start()
             tcpServer = tcp
@@ -1099,6 +1169,13 @@ public class MirrorEngine: ObservableObject {
         guard status == .running else { return }
         DispatchQueue.main.async { self.status = .stopping }
 
+        // Restore Mac brightness before tearing down
+        if let saved = savedMacBrightness {
+            MacBrightness.set(saved)
+            savedMacBrightness = nil
+            print("[Mac] Brightness restored to \(saved)")
+        }
+
         Task {
             // Stop in reverse order
             displayController?.stop()
@@ -1132,6 +1209,30 @@ public class MirrorEngine: ObservableObject {
 
             print("Mirror stopped")
         }
+    }
+
+    /// Lightweight reconnect: re-establish ADB tunnel and relaunch the Android app
+    /// without tearing down the virtual display, capture, or servers.
+    public func reconnect() {
+        guard status == .running else { return }
+        print("[MirrorEngine] Reconnecting ADB...")
+        Task.detached {
+            ADBBridge.setupReverseTunnel(port: TCP_PORT)
+            ADBBridge.launchApp()
+            await MainActor.run { self.adbConnected = true }
+            print("[MirrorEngine] Reconnect done — tunnel + app relaunched")
+        }
+    }
+
+    /// Quadratic curve with widened landing zone at the low end.
+    ///   pos 0.00–0.03 → off (0)
+    ///   pos 0.03–0.08 → minimum (1)  — ~5% of slider travel
+    ///   pos 0.08–1.00 → quadratic ramp (2–255)
+    public static func brightnessFromSliderPos(_ pos: Double) -> Int {
+        if pos < 0.03 { return 0 }
+        let raw = pos * pos * 255.0
+        if raw < 1.5 { return 1 }
+        return min(255, Int(raw))
     }
 
     public func setBrightness(_ value: Int) {
