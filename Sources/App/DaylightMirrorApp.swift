@@ -73,15 +73,40 @@ struct MirrorMenuView: View {
                 idleView
             }
 
+            // Keyboard shortcuts reference
+            if engine.status == .running {
+                Divider()
+
+                VStack(spacing: 4) {
+                    Text("Ctrl + Function Keys")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    HStack(spacing: 6) {
+                        shortcutGroup("F1", "F2", label: "Brightness")
+                        Spacer()
+                        shortcutPill("F10", label: "Toggle Backlight")
+                        Spacer()
+                        shortcutGroup("F11", "F12", label: "Warmth")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
             Divider()
 
-            Button("Quit") {
-                engine.stop()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    NSApp.terminate(nil)
+            HStack {
+                Button("Quit") {
+                    engine.stop()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        NSApp.terminate(nil)
+                    }
                 }
+                .font(.caption)
+                Spacer()
+                Link("GitHub", destination: URL(string: "https://github.com/welfvh/daylight-mirror")!)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .font(.caption)
         }
         .padding()
         .frame(width: 280)
@@ -221,6 +246,8 @@ struct MirrorMenuView: View {
 
         Divider()
 
+        Divider()
+
         // Restart / Stop
         HStack(spacing: 8) {
             Button(action: {
@@ -305,5 +332,43 @@ struct MirrorMenuView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
         }
+    }
+
+    // MARK: - Keyboard Shortcut Pills
+
+    @ViewBuilder
+    func shortcutGroup(_ key1: String, _ key2: String, label: String) -> some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 3) {
+                keyPill(key1)
+                keyPill(key2)
+            }
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    func shortcutPill(_ key: String, label: String) -> some View {
+        VStack(spacing: 2) {
+            keyPill(key)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    func keyPill(_ key: String) -> some View {
+        Text(key)
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.quaternary)
+            )
     }
 }
