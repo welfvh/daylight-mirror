@@ -8,9 +8,22 @@ Your Mac renders natively at the Daylight's 4:3 resolution. What you see on the 
 
 **30 FPS. Under 10ms latency. Lossless. Zero artifacts.** This is as fast, as clean, and as efficient as a software display mirror can physically be.
 
-## Install
+## Download
 
-### Homebrew (recommended)
+### [Get Daylight Mirror on Gumroad](https://welfie.gumroad.com/l/daylight-mirror)
+
+The `.dmg` includes both the Mac menu bar app and the Android APK for your Daylight. Pay what you want (starting at $1).
+
+After downloading, drag "Daylight Mirror" to Applications, then install the included APK on your Daylight:
+
+```bash
+adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk
+```
+
+<details>
+<summary>Other install options</summary>
+
+### Homebrew
 
 ```bash
 brew install --cask welfvh/tap/daylight-mirror
@@ -22,16 +35,15 @@ Then install the app on your Daylight (one time):
 adb install /opt/homebrew/share/daylight-mirror/DaylightMirror.apk
 ```
 
-<details>
-<summary>Other install options</summary>
+### GitHub Releases
 
-**Download:** Grab the `.dmg` from [Releases](https://github.com/welfvh/daylight-mirror/releases). Drag "Daylight Mirror" to Applications, then install the included APK:
+Grab the `.dmg` from [Releases](https://github.com/welfvh/daylight-mirror/releases). Drag "Daylight Mirror" to Applications, then install the included APK:
 
 ```bash
 adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk
 ```
 
-**Build from source:**
+### Build from source
 
 ```bash
 git clone https://github.com/welfvh/daylight-mirror
@@ -112,7 +124,7 @@ The blog series tells the full story:
 
 ## Support
 
-If you find this useful, you can [buy me a coffee on Gumroad](https://3200327913413.gumroad.com/l/daylight-mirror).
+If you find this useful, you can [buy me a coffee on Gumroad](https://welfie.gumroad.com/l/daylight-mirror).
 
 ## License
 
