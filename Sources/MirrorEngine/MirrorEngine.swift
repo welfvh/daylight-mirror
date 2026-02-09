@@ -1045,9 +1045,9 @@ public class MirrorEngine: ObservableObject {
         }
     }
 
-    /// Check if Screen Recording permission is granted. On macOS 14+, attempting
-    /// SCShareableContent without permission throws an error rather than crashing,
-    /// but we can also pre-check via CGPreflightScreenCaptureAccess.
+    // MARK: - Permission & Device Checks
+
+    /// Check if Screen Recording permission is granted.
     public static func hasScreenRecordingPermission() -> Bool {
         return CGPreflightScreenCaptureAccess()
     }
@@ -1055,6 +1055,38 @@ public class MirrorEngine: ObservableObject {
     /// Prompt the user for Screen Recording permission (opens System Settings).
     public static func requestScreenRecordingPermission() {
         CGRequestScreenCaptureAccess()
+    }
+
+    /// Check if Accessibility permission is granted (needed for global keyboard shortcuts).
+    public static func hasAccessibilityPermission() -> Bool {
+        return AXIsProcessTrusted()
+    }
+
+    /// Prompt for Accessibility permission with the system dialog.
+    public static func requestAccessibilityPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
+    }
+
+    /// Check if adb is installed.
+    public static func hasADB() -> Bool {
+        return ADBBridge.isAvailable()
+    }
+
+    /// Check if a Daylight device is connected via USB.
+    public static func hasDevice() -> Bool {
+        return ADBBridge.connectedDevice() != nil
+    }
+
+    /// Whether the onboarding setup has been completed.
+    public static var setupCompleted: Bool {
+        get { UserDefaults.standard.bool(forKey: "setupCompleted") }
+        set { UserDefaults.standard.set(newValue, forKey: "setupCompleted") }
+    }
+
+    /// Whether all required permissions are granted.
+    public static var allPermissionsGranted: Bool {
+        hasScreenRecordingPermission() && hasAccessibilityPermission()
     }
 
     @MainActor

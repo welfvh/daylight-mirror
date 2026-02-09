@@ -8,6 +8,8 @@ import android.animation.ValueAnimator
 import android.app.Activity
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.Surface
@@ -33,6 +35,9 @@ class MirrorActivity : Activity() {
     private lateinit var statusHint: TextView
     private lateinit var statusContainer: LinearLayout
     private var pulseAnimator: ObjectAnimator? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var isConnected = false
+    private var pendingDisconnect: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,29 +115,44 @@ class MirrorActivity : Activity() {
     }
 
     /// Called from native code when connection state changes.
+    /// Debounced: disconnect waits 500ms before showing overlay (avoids flicker during reconnect).
+    /// Connect is immediate (hide overlay as soon as frames arrive).
     @Suppress("unused")
     fun onConnectionState(connected: Boolean) {
         runOnUiThread {
             if (connected) {
-                pulseAnimator?.cancel()
-                pulseAnimator = null
-                statusTitle.alpha = 1f
-                statusContainer.visibility = View.GONE
+                // Cancel any pending disconnect — connection recovered
+                pendingDisconnect?.let { handler.removeCallbacks(it) }
+                pendingDisconnect = null
+                if (!isConnected) {
+                    isConnected = true
+                    pulseAnimator?.cancel()
+                    pulseAnimator = null
+                    statusTitle.alpha = 1f
+                    statusContainer.visibility = View.GONE
+                }
             } else {
-                statusTitle.text = "Daylight Mirror is reconnecting..."
-                statusHint.text = "1. Check USB cable\n" +
-                    "2. Open Daylight Mirror on Mac\n" +
-                    "3. Start via menu bar or Ctrl+F8"
-                statusContainer.visibility = View.VISIBLE
-                // Slow pulse on title only — hints stay static
-                if (pulseAnimator == null) {
-                    pulseAnimator = ObjectAnimator.ofFloat(statusTitle, "alpha", 1f, 0.3f).apply {
-                        duration = 2000
-                        repeatMode = ValueAnimator.REVERSE
-                        repeatCount = ValueAnimator.INFINITE
-                        interpolator = AccelerateDecelerateInterpolator()
-                        start()
+                if (isConnected && pendingDisconnect == null) {
+                    // Delay showing overlay — the native code may reconnect quickly
+                    pendingDisconnect = Runnable {
+                        isConnected = false
+                        pendingDisconnect = null
+                        statusTitle.text = "Daylight Mirror is reconnecting..."
+                        statusHint.text = "1. Check USB cable\n" +
+                            "2. Open Daylight Mirror on Mac\n" +
+                            "3. Start via menu bar or Ctrl+F8"
+                        statusContainer.visibility = View.VISIBLE
+                        if (pulseAnimator == null) {
+                            pulseAnimator = ObjectAnimator.ofFloat(statusTitle, "alpha", 1f, 0.3f).apply {
+                                duration = 2000
+                                repeatMode = ValueAnimator.REVERSE
+                                repeatCount = ValueAnimator.INFINITE
+                                interpolator = AccelerateDecelerateInterpolator()
+                                start()
+                            }
+                        }
                     }
+                    handler.postDelayed(pendingDisconnect!!, 500)
                 }
             }
         }
