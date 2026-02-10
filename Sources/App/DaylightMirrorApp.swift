@@ -633,16 +633,39 @@ struct MirrorMenuView: View {
 
     // MARK: - Running View
 
+    @State private var showDetailedStats = false
+
     @ViewBuilder
     var runningView: some View {
-        // Stats
-        HStack {
-            Label(String(format: "%.0f FPS", engine.fps), systemImage: "speedometer")
-            Spacer()
-            Text(String(format: "%.1f MB/s", engine.bandwidth))
-                .foregroundStyle(.secondary)
+        // Stats — tap to expand
+        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showDetailedStats.toggle() } }) {
+            HStack {
+                Label(String(format: "%.0f FPS", engine.fps), systemImage: "speedometer")
+                Spacer()
+                Text(String(format: "%.1f MB/s", engine.bandwidth))
+                    .foregroundStyle(.secondary)
+                Image(systemName: showDetailedStats ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .contentShape(Rectangle())
         }
-        .font(.caption)
+        .buttonStyle(.plain)
+
+        if showDetailedStats {
+            VStack(spacing: 4) {
+                statsRow("Resolution", "\(engine.resolution.rawValue)\(engine.resolution.isHiDPI ? " HiDPI" : "")")
+                statsRow("Frame size", "\(engine.frameSizeKB) KB")
+                statsRow("Total frames", "\(engine.totalFrames)")
+                statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
+                statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
+                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 30.0) * 100))
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
+        }
 
         // Client status
         HStack(spacing: 6) {
@@ -737,6 +760,29 @@ struct MirrorMenuView: View {
 
         Divider()
 
+        // Sharpening slider (0-1.5)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Image(systemName: "circle.dashed")
+                    .font(.caption2)
+                Slider(
+                    value: Binding(
+                        get: { engine.sharpenAmount },
+                        set: { engine.sharpenAmount = $0 }
+                    ),
+                    in: 0...1.5,
+                    step: 0.1
+                )
+                Image(systemName: "diamond")
+                    .font(.caption2)
+            }
+            Text("Sharpen: \(String(format: "%.1f", engine.sharpenAmount))")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+        }
+
+        Divider()
+
         // Reconnect / Restart / Stop
         HStack(spacing: 6) {
             Button(action: { engine.reconnect() }) {
@@ -827,6 +873,21 @@ struct MirrorMenuView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
+        }
+    }
+
+    // MARK: - Stats Row
+
+    @ViewBuilder
+    func statsRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.primary)
         }
     }
 

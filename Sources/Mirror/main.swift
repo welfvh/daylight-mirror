@@ -412,6 +412,36 @@ func commandRestart() {
     runControlCommand("RESTART")
 }
 
+/// `daylight-mirror sharpen [0.0-3.0]` — get or set sharpening amount.
+func commandSharpen() {
+    let arg = args.count > 2 ? args[2] : nil
+    if let arg = arg {
+        runControlCommand("SHARPEN \(arg)")
+    } else {
+        runControlCommand("SHARPEN")
+    }
+}
+
+/// `daylight-mirror contrast [1.0-2.0]` — get or set contrast enhancement.
+func commandContrast() {
+    let arg = args.count > 2 ? args[2] : nil
+    if let arg = arg {
+        runControlCommand("CONTRAST \(arg)")
+    } else {
+        runControlCommand("CONTRAST")
+    }
+}
+
+/// `daylight-mirror fontsmoothing [on|off]` — get or set macOS font smoothing.
+func commandFontSmoothing() {
+    let arg = args.count > 2 ? args[2].lowercased() : nil
+    if let arg = arg {
+        runControlCommand("FONTSMOOTHING \(arg)")
+    } else {
+        runControlCommand("FONTSMOOTHING")
+    }
+}
+
 /// Print usage information.
 func printUsage() {
     print("Daylight Mirror v\(MirrorEngine.appVersion) -- CLI")
@@ -426,7 +456,10 @@ func printUsage() {
     print("  brightness [0-255]       Get or set Daylight brightness")
     print("  warmth [0-255]           Get or set Daylight warmth (amber rate)")
     print("  backlight [on|off|toggle] Get or toggle backlight")
-    print("  resolution [preset]      Get or set resolution (comfortable, balanced, sharp)")
+    print("  resolution [preset]      Get or set resolution (cozy, comfortable, balanced, sharp)")
+    print("  sharpen [0.0-3.0]        Get or set sharpening (0=none, 1=mild, 2=strong)")
+    print("  contrast [1.0-2.0]       Get or set contrast (1.0=off, 1.5=moderate, 2.0=high)")
+    print("  fontsmoothing [on|off]   Get or set macOS font smoothing (off = crisper text)")
     print("  restart                  Full stop + start cycle")
     print("")
     print("The `start` command keeps the process alive. Stop it with Ctrl+C or `daylight-mirror stop`.")
@@ -457,6 +490,12 @@ case "resolution":
     commandResolution()
 case "restart":
     commandRestart()
+case "sharpen":
+    commandSharpen()
+case "contrast":
+    commandContrast()
+case "fontsmoothing":
+    commandFontSmoothing()
 case "-h", "--help", "help":
     printUsage()
     exit(0)

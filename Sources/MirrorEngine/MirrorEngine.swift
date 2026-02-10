@@ -26,17 +26,28 @@ let TARGET_FPS: Int = 30
 let JPEG_QUALITY: CGFloat = 0.8
 let KEYFRAME_INTERVAL: Int = 30
 
-// Resolution presets (all 4:3, matching Daylight DC-1 aspect ratio)
+// Image processing for e-ink/greyscale displays.
+// macOS font smoothing produces subpixel-antialiased text that looks fuzzy when
+// converted to greyscale. Two independent post-processing knobs counteract this:
+//   sharpenAmount (0.0-3.0): spatial sharpening via Laplacian kernel
+//   contrastAmount (1.0-2.0): linear contrast stretch around midpoint
+
+// Resolution presets (all 4:3, matching Daylight DC-1's native 1600x1200 panel).
+// Cozy uses HiDPI (2x): macOS renders at 800x600 logical points with 1600x1200 backing
+// pixels — big UI, full native sharpness. Other presets are non-HiDPI 1:1 pixel modes.
 public enum DisplayResolution: String, CaseIterable, Identifiable {
-    case cozy        = "800x600"    // Extra large UI, maximum readability
+    case cozy        = "800x600"    // HiDPI 2x: 800x600pt → 1600x1200px — large UI, native sharpness
     case comfortable = "1024x768"   // Larger UI, easy on the eyes
     case balanced    = "1280x960"   // Good balance of size and sharpness
-    case sharp       = "1600x1200"  // Maximum sharpness, smaller UI
+    case sharp       = "1600x1200"  // Maximum sharpness, smaller UI (1:1 native)
 
     public var id: String { rawValue }
-    public var width: UInt { switch self { case .cozy: 800; case .comfortable: 1024; case .balanced: 1280; case .sharp: 1600 } }
-    public var height: UInt { switch self { case .cozy: 600; case .comfortable: 768; case .balanced: 960; case .sharp: 1200 } }
+    /// Pixel dimensions captured by SCStream and sent to the Daylight.
+    public var width: UInt { switch self { case .cozy: 1600; case .comfortable: 1024; case .balanced: 1280; case .sharp: 1600 } }
+    public var height: UInt { switch self { case .cozy: 1200; case .comfortable: 768; case .balanced: 960; case .sharp: 1200 } }
     public var label: String { switch self { case .cozy: "Cozy"; case .comfortable: "Comfortable"; case .balanced: "Balanced"; case .sharp: "Sharp" } }
+    /// Whether the virtual display uses HiDPI (2x) scaling.
+    public var isHiDPI: Bool { switch self { case .cozy: true; default: false } }
 }
 
 // Protocol constants
@@ -197,8 +208,9 @@ struct MacBrightness {
 
 // MARK: - Virtual Display Manager
 
-/// Creates a non-HiDPI virtual display at the given resolution and mirrors the Mac's
-/// built-in display to it. Uses CGVirtualDisplay private API (same as BetterDisplay, DeskPad).
+/// Creates a virtual display at the given resolution and mirrors the Mac's built-in
+/// display to it. Uses CGVirtualDisplay private API (same as BetterDisplay, DeskPad).
+/// With hiDPI=true, macOS renders at 2x — e.g. 1600x1200 pixels at 800x600 logical points.
 /// The virtual display disappears when this object is deallocated.
 class VirtualDisplayManager {
     let virtualDisplay: CGVirtualDisplay
@@ -206,7 +218,7 @@ class VirtualDisplayManager {
     let width: UInt
     let height: UInt
 
-    init(width: UInt, height: UInt) {
+    init(width: UInt, height: UInt, hiDPI: Bool = false) {
         self.width = width
         self.height = height
 
@@ -228,7 +240,7 @@ class VirtualDisplayManager {
         print("Virtual display created: ID \(displayID)")
 
         let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 0
+        settings.hiDPI = hiDPI ? 1 : 0
         settings.modes = [
             CGVirtualDisplayMode(width: width, height: height, refreshRate: 60)
         ]
@@ -237,7 +249,8 @@ class VirtualDisplayManager {
             print("WARNING: Failed to apply virtual display settings")
             return
         }
-        print("Virtual display configured: \(width)x\(height) non-HiDPI @ 60Hz")
+        let modeLabel = hiDPI ? "HiDPI (\(width/2)x\(height/2)pt @ 2x)" : "non-HiDPI"
+        print("Virtual display configured: \(width)x\(height) \(modeLabel) @ 60Hz")
     }
 
     func mirrorBuiltInDisplay() {
@@ -651,6 +664,11 @@ class ScreenCapture: NSObject, SCStreamOutput {
     var previousGray: UnsafeMutablePointer<UInt8>?
     var deltaBuffer: UnsafeMutablePointer<UInt8>?
     var compressedBuffer: UnsafeMutablePointer<CChar>?
+    var sharpenTemp: UnsafeMutablePointer<UInt8>?  // Pre-sharpen greyscale buffer
+    var contrastLUT: [UInt8] = Array(0...255)       // Precomputed contrast LUT
+    var lastContrastAmount: Double = 1.0           // Tracks when to rebuild LUT
+    var sharpenAmount: Double = 1.0                // 0=none, 1=mild, 2=strong, 3=max
+    var contrastAmount: Double = 1.0               // 1.0=off, >1=enhanced
     var frameWidth: Int = 0
     var frameHeight: Int = 0
     var pixelCount: Int = 0
@@ -662,8 +680,8 @@ class ScreenCapture: NSObject, SCStreamOutput {
     var statFrames: Int = 0
     var lastCompressedSize: Int = 0
 
-    /// Callback: (fps, bandwidthMB, frameSizeKB, totalFrames)
-    var onStats: ((Double, Double, Int, Int) -> Void)?
+    /// Callback: (fps, bandwidthMB, frameSizeKB, totalFrames, greyMs, compressMs)
+    var onStats: ((Double, Double, Int, Int, Double, Double) -> Void)?
 
     let expectedWidth: Int
     let expectedHeight: Int
@@ -684,24 +702,29 @@ class ScreenCapture: NSObject, SCStreamOutput {
         guard let display = content.displays.first(where: {
             $0.displayID == targetDisplayID
         }) ?? content.displays.first(where: {
-            $0.width == expectedWidth && $0.height == expectedHeight
+            // Match by pixel OR logical dimensions (HiDPI reports logical size)
+            ($0.width == expectedWidth && $0.height == expectedHeight) ||
+            ($0.width == expectedWidth / 2 && $0.height == expectedHeight / 2)
         }) ?? content.displays.first else {
             print("No display found!")
             return
         }
 
-        frameWidth = Int(display.width)
-        frameHeight = Int(display.height)
+        // Use expected (pixel) dimensions, not display.width/height which are logical
+        // points. For HiDPI, display.width = 800 but we need 1600 actual pixels.
+        frameWidth = expectedWidth
+        frameHeight = expectedHeight
         pixelCount = frameWidth * frameHeight
 
         currentGray = .allocate(capacity: pixelCount)
         previousGray = .allocate(capacity: pixelCount)
         deltaBuffer = .allocate(capacity: pixelCount)
+        sharpenTemp = .allocate(capacity: pixelCount)
         let maxCompressed = LZ4_compressBound(Int32(pixelCount))
         compressedBuffer = .allocate(capacity: Int(maxCompressed))
         previousGray!.initialize(repeating: 0, count: pixelCount)
 
-        print("Capturing display: \(display.width)x\(display.height) (ID: \(display.displayID))")
+        print("Capturing display: \(expectedWidth)x\(expectedHeight) pixels (logical: \(display.width)x\(display.height), ID: \(display.displayID))")
 
         let config = SCStreamConfiguration()
         config.width = frameWidth
@@ -730,6 +753,7 @@ class ScreenCapture: NSObject, SCStreamOutput {
         currentGray?.deallocate(); currentGray = nil
         previousGray?.deallocate(); previousGray = nil
         deltaBuffer?.deallocate(); deltaBuffer = nil
+        sharpenTemp?.deallocate(); sharpenTemp = nil
         compressedBuffer?.deallocate(); compressedBuffer = nil
     }
 
@@ -750,23 +774,61 @@ class ScreenCapture: NSObject, SCStreamOutput {
             width: vImagePixelCount(frameWidth),
             rowBytes: rowBytes
         )
-        var dstBuffer = vImage_Buffer(
-            data: currentGray!,
-            height: vImagePixelCount(frameHeight),
-            width: vImagePixelCount(frameWidth),
-            rowBytes: frameWidth
-        )
 
         var matrix: [Int16] = [29, 150, 77, 0]
-        let divisor: Int32 = 256
+        let greyDivisor: Int32 = 256
         var preBias: [Int16] = [0, 0, 0, 0]
 
-        vImageMatrixMultiply_ARGB8888ToPlanar8(
-            &srcBuffer, &dstBuffer,
-            &matrix, divisor,
-            &preBias, 0,
-            vImage_Flags(kvImageNoFlags)
-        )
+        let sharpAmt = sharpenAmount
+        let contrastAmt = contrastAmount
+
+        if sharpAmt > 0.01 {
+            // Greyscale → sharpenTemp, then Laplacian convolve → currentGray
+            // Kernel: [0, -a, 0; -a, 1+4a, -a; 0, -a, 0] with divisor to allow fractional a.
+            // Use divisor=4 for 0.25 step granularity.
+            var preSharpenBuffer = vImage_Buffer(
+                data: sharpenTemp!, height: vImagePixelCount(frameHeight),
+                width: vImagePixelCount(frameWidth), rowBytes: frameWidth
+            )
+            vImageMatrixMultiply_ARGB8888ToPlanar8(
+                &srcBuffer, &preSharpenBuffer, &matrix, greyDivisor, &preBias, 0,
+                vImage_Flags(kvImageNoFlags)
+            )
+            var dstBuffer = vImage_Buffer(
+                data: currentGray!, height: vImagePixelCount(frameHeight),
+                width: vImagePixelCount(frameWidth), rowBytes: frameWidth
+            )
+            let a = Int16(sharpAmt * 4)  // scale by divisor=4
+            let center = 4 + 4 * a       // (1 + 4*amount) * divisor = 4 + 4*a
+            var kernel: [Int16] = [0, -a, 0, -a, center, -a, 0, -a, 0]
+            vImageConvolve_Planar8(
+                &preSharpenBuffer, &dstBuffer, nil, 0, 0,
+                &kernel, 3, 3, 4, 0, vImage_Flags(kvImageEdgeExtend)
+            )
+        } else {
+            // No sharpening — greyscale directly into currentGray
+            var dstBuffer = vImage_Buffer(
+                data: currentGray!, height: vImagePixelCount(frameHeight),
+                width: vImagePixelCount(frameWidth), rowBytes: frameWidth
+            )
+            vImageMatrixMultiply_ARGB8888ToPlanar8(
+                &srcBuffer, &dstBuffer, &matrix, greyDivisor, &preBias, 0,
+                vImage_Flags(kvImageNoFlags)
+            )
+        }
+
+        // Contrast enhancement (independent of sharpening).
+        // LUT rebuilt lazily on capture thread to avoid data race with main thread.
+        if contrastAmt > 1.01 {
+            if contrastAmt != lastContrastAmount {
+                contrastLUT = (0..<256).map { i in
+                    UInt8(max(0, min(255, Int(128.0 + contrastAmt * (Double(i) - 128.0)))))
+                }
+                lastContrastAmount = contrastAmt
+            }
+            let lut = contrastLUT
+            for i in 0..<pixelCount { currentGray![i] = lut[Int(currentGray![i])] }
+        }
 
         let t1 = CACurrentMediaTime()
 
@@ -827,7 +889,7 @@ class ScreenCapture: NSObject, SCStreamOutput {
 
             print(String(format: "FPS: %.1f | gray: %.1fms | lz4+delta: %.1fms | frame: %dKB | ~%.1fMB/s | total: %d",
                          fps, avgConvert, avgCompress, lastCompressedSize / 1024, bw, frameCount))
-            onStats?(fps, bw, lastCompressedSize / 1024, frameCount)
+            onStats?(fps, bw, lastCompressedSize / 1024, frameCount, avgConvert, avgCompress)
 
             statFrames = 0
             convertTimeSum = 0
@@ -1237,6 +1299,46 @@ public class ControlSocket {
                 return "ERR not running"
             }
 
+        case "SHARPEN":
+            if let arg = parts.dropFirst().first {
+                guard let val = Double(arg), val >= 0, val <= 3.0 else {
+                    return "ERR value must be 0.0-3.0 (0=none, 1=mild, 2=strong)"
+                }
+                engine.sharpenAmount = val
+                return "OK \(String(format: "%.1f", val))"
+            } else {
+                return "OK \(String(format: "%.1f", engine.sharpenAmount))"
+            }
+
+        case "CONTRAST":
+            if let arg = parts.dropFirst().first {
+                guard let val = Double(arg), val >= 1.0, val <= 2.0 else {
+                    return "ERR value must be 1.0-2.0 (1.0=off, 1.5=moderate, 2.0=high)"
+                }
+                engine.contrastAmount = val
+                return "OK \(String(format: "%.1f", val))"
+            } else {
+                return "OK \(String(format: "%.1f", engine.contrastAmount))"
+            }
+
+        case "FONTSMOOTHING":
+            if let arg = parts.dropFirst().first?.lowercased() {
+                switch arg {
+                case "on":
+                    engine.setFontSmoothing(enabled: true)
+                    engine.fontSmoothingDisabled = false
+                    return "OK on"
+                case "off":
+                    engine.setFontSmoothing(enabled: false)
+                    engine.fontSmoothingDisabled = true
+                    return "OK off"
+                default:
+                    return "ERR use on or off"
+                }
+            } else {
+                return "OK \(engine.fontSmoothingDisabled ? "off" : "on")"
+            }
+
         default:
             return "ERR unknown command"
         }
@@ -1246,7 +1348,7 @@ public class ControlSocket {
 // MARK: - Mirror Engine
 
 public class MirrorEngine: ObservableObject {
-    public static let appVersion = "1.2.0"
+    public static let appVersion = "1.3.0"
 
     @Published public var status: MirrorStatus = .idle
     @Published public var fps: Double = 0
@@ -1257,6 +1359,22 @@ public class MirrorEngine: ObservableObject {
     @Published public var adbConnected: Bool = false
     @Published public var clientCount: Int = 0
     @Published public var totalFrames: Int = 0
+    @Published public var frameSizeKB: Int = 0
+    @Published public var greyMs: Double = 0      // Greyscale + sharpen time per frame
+    @Published public var compressMs: Double = 0   // LZ4 delta compress time per frame
+    @Published public var sharpenAmount: Double = 1.0 {
+        didSet {
+            capture?.sharpenAmount = sharpenAmount
+            UserDefaults.standard.set(sharpenAmount, forKey: "sharpenAmount")
+        }
+    }
+    @Published public var contrastAmount: Double = 1.0 {
+        didSet {
+            capture?.contrastAmount = contrastAmount
+            UserDefaults.standard.set(contrastAmount, forKey: "contrastAmount")
+        }
+    }
+    @Published public var fontSmoothingDisabled: Bool = false
     @Published public var updateVersion: String? = nil
     @Published public var updateURL: String? = nil
     @Published public var resolution: DisplayResolution {
@@ -1276,7 +1394,12 @@ public class MirrorEngine: ObservableObject {
     public init() {
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
         self.resolution = DisplayResolution(rawValue: saved) ?? .comfortable
-        NSLog("[MirrorEngine] init, resolution: %@", resolution.rawValue)
+        let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
+        self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.0
+        let savedContrast = UserDefaults.standard.double(forKey: "contrastAmount")
+        self.contrastAmount = savedContrast > 0 ? savedContrast : 1.0
+        NSLog("[MirrorEngine] init, resolution: %@, sharpen: %.1f, contrast: %.1f",
+              resolution.rawValue, sharpenAmount, contrastAmount)
 
         // Control socket — always listening so CLI can send START/STOP/etc.
         // Started after init completes (self is fully initialized).
@@ -1391,6 +1514,11 @@ public class MirrorEngine: ObservableObject {
     public func start() async {
         guard status == .idle || status != .starting else { return }
 
+        // Disable font smoothing for cleaner greyscale rendering on e-ink
+        if fontSmoothingDisabled {
+            setFontSmoothing(enabled: false)
+        }
+
         // Check Screen Recording permission before attempting capture
         if !Self.hasScreenRecordingPermission() {
             Self.requestScreenRecordingPermission()
@@ -1414,7 +1542,7 @@ public class MirrorEngine: ObservableObject {
         // 2. Virtual display at selected resolution
         let w = resolution.width
         let h = resolution.height
-        displayManager = VirtualDisplayManager(width: w, height: h)
+        displayManager = VirtualDisplayManager(width: w, height: h, hiDPI: resolution.isHiDPI)
         try? await Task.sleep(for: .seconds(1))
 
         // 3. Mirroring
@@ -1475,11 +1603,16 @@ public class MirrorEngine: ObservableObject {
             targetDisplayID: displayManager!.displayID,
             width: Int(w), height: Int(h)
         )
-        cap.onStats = { [weak self] fps, bw, _, total in
+        cap.sharpenAmount = sharpenAmount
+        cap.contrastAmount = contrastAmount
+        cap.onStats = { [weak self] fps, bw, frameKB, total, grey, compress in
             DispatchQueue.main.async {
                 self?.fps = fps
                 self?.bandwidth = bw
                 self?.totalFrames = total
+                self?.frameSizeKB = frameKB
+                self?.greyMs = grey
+                self?.compressMs = compress
             }
         }
         capture = cap
@@ -1557,6 +1690,11 @@ public class MirrorEngine: ObservableObject {
                 ADBBridge.removeReverseTunnel(port: TCP_PORT)
             }
 
+            // Restore font smoothing when mirror stops
+            if self.fontSmoothingDisabled {
+                self.setFontSmoothing(enabled: true)
+            }
+
             await MainActor.run {
                 status = .idle
                 fps = 0
@@ -1611,5 +1749,21 @@ public class MirrorEngine: ObservableObject {
             brightness = dc.currentBrightness
             backlightOn = dc.backlightOn
         }
+    }
+
+    /// Disable macOS font smoothing (subpixel AA). Dramatically improves text clarity
+    /// on greyscale displays like the Daylight DC-1. Restored when mirror stops.
+    public func setFontSmoothing(enabled: Bool) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        if enabled {
+            task.arguments = ["delete", "-g", "AppleFontSmoothing"]
+        } else {
+            task.arguments = ["write", "-g", "AppleFontSmoothing", "-int", "0"]
+        }
+        try? task.run()
+        task.waitUntilExit()
+        fontSmoothingDisabled = !enabled
+        print("[Engine] Font smoothing \(enabled ? "enabled" : "disabled")")
     }
 }
