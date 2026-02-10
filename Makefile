@@ -12,7 +12,8 @@
 
 APP_NAME := Daylight Mirror
 APP_BUNDLE := $(HOME)/Applications/$(APP_NAME).app
-BINARY := server/.build/release/DaylightMirror
+BINARY := .build/release/DaylightMirror
+CLI_BINARY := .build/release/daylight-mirror
 APK := android/app/build/outputs/apk/debug/app-debug.apk
 
 .PHONY: mac android install deploy run clean
@@ -20,7 +21,7 @@ APK := android/app/build/outputs/apk/debug/app-debug.apk
 # Build Mac menu bar app
 mac:
 	@echo "Building Mac app..."
-	cd server && swift build -c release
+	swift build -c release
 	@echo "Done: $(BINARY)"
 
 # Build Android APK (requires Android SDK + NDK)
@@ -49,6 +50,12 @@ install: mac
 	@echo "Installed: $(APP_BUNDLE)"
 	@echo "Open from Spotlight or: open \"$(APP_BUNDLE)\""
 
+# Install CLI tool to /usr/local/bin
+install-cli: mac
+	@echo "Installing CLI..."
+	@cp $(CLI_BINARY) /usr/local/bin/daylight-mirror
+	@echo "Installed: /usr/local/bin/daylight-mirror"
+
 # Deploy APK to connected Daylight via adb
 deploy:
 	@if [ ! -f "$(APK)" ]; then echo "APK not found. Run 'make android' first (requires Android SDK)."; exit 1; fi
@@ -66,6 +73,6 @@ tunnel:
 	@echo "Tunnel ready: device:8888 → mac:8888"
 
 clean:
-	cd server && swift package clean
+	swift package clean
 	rm -rf "$(APP_BUNDLE)"
 	@echo "Cleaned"

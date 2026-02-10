@@ -1,4 +1,0 @@
-module CVirtualDisplay {
-    header "CGVirtualDisplayPrivate.h"
-    export *
-}
