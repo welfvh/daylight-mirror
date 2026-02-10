@@ -30,6 +30,11 @@ let package = Package(
             name: "DaylightMirror",
             dependencies: ["MirrorEngine"],
             path: "Sources/App"
+        ),
+        .testTarget(
+            name: "MirrorEngineTests",
+            dependencies: ["MirrorEngine"],
+            path: "Tests/MirrorEngineTests"
         )
     ]
 )

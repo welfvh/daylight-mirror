@@ -16,7 +16,7 @@ BINARY := .build/release/DaylightMirror
 CLI_BINARY := .build/release/daylight-mirror
 APK := android/app/build/outputs/apk/debug/app-debug.apk
 
-.PHONY: mac android install deploy run clean
+.PHONY: mac android install deploy run test clean
 
 # Build Mac menu bar app
 mac:
@@ -49,6 +49,10 @@ install: mac
 		"$(APP_BUNDLE)/Contents/Info.plist"
 	@echo "Installed: $(APP_BUNDLE)"
 	@echo "Open from Spotlight or: open \"$(APP_BUNDLE)\""
+
+# Run tests
+test:
+	swift test
 
 # Install CLI tool to /usr/local/bin
 install-cli: mac

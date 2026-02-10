@@ -36,7 +36,7 @@ struct UpdateChecker {
     }
 
     /// Simple semver comparison: returns true if remote > local
-    private static func isNewer(remote: String, local: String) -> Bool {
+    static func isNewer(remote: String, local: String) -> Bool {
         let r = remote.split(separator: ".").compactMap { Int($0) }
         let l = local.split(separator: ".").compactMap { Int($0) }
         for i in 0..<max(r.count, l.count) {
