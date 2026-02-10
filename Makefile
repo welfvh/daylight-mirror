@@ -29,11 +29,43 @@ android:
 	cd android && ./gradlew assembleDebug
 	@echo "Done: $(APK)"
 
+# Download Android platform-tools (provides adb binary) if not already cached.
+# The binary is ~6MB and gets embedded in the .app bundle for zero-config setup.
+PLATFORM_TOOLS_DIR := tools/platform-tools
+ADB_BINARY := $(PLATFORM_TOOLS_DIR)/adb
+
+$(ADB_BINARY):
+	@echo "Downloading Android platform-tools..."
+	@mkdir -p tools
+	@curl -sL https://dl.google.com/android/repository/platform-tools-latest-darwin.zip -o tools/platform-tools.zip
+	@unzip -qo tools/platform-tools.zip -d tools/
+	@rm tools/platform-tools.zip
+	@echo "Downloaded adb: $(ADB_BINARY)"
+
+fetch-adb: $(ADB_BINARY)
+	@echo "adb binary ready: $(ADB_BINARY)"
+
 # Install Mac app to ~/Applications as a proper .app bundle
 install: mac
 	@echo "Installing $(APP_NAME)..."
 	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
+	@mkdir -p "$(APP_BUNDLE)/Contents/Resources"
 	@cp $(BINARY) "$(APP_BUNDLE)/Contents/MacOS/DaylightMirror"
+	@# Embed bundled adb if available (run 'make fetch-adb' first)
+	@if [ -f "$(ADB_BINARY)" ]; then \
+		cp "$(ADB_BINARY)" "$(APP_BUNDLE)/Contents/Resources/adb"; \
+		chmod +x "$(APP_BUNDLE)/Contents/Resources/adb"; \
+		echo "Embedded bundled adb"; \
+	else \
+		echo "No bundled adb (run 'make fetch-adb' to embed). Will use system adb."; \
+	fi
+	@# Embed companion APK if available (run 'make android' first)
+	@if [ -f "$(APK)" ]; then \
+		cp "$(APK)" "$(APP_BUNDLE)/Contents/Resources/app-debug.apk"; \
+		echo "Embedded companion APK"; \
+	else \
+		echo "No APK found (run 'make android' to build). Auto-install will be skipped."; \
+	fi
 	@/usr/libexec/PlistBuddy -c "Clear dict" "$(APP_BUNDLE)/Contents/Info.plist" 2>/dev/null || true
 	@/usr/libexec/PlistBuddy \
 		-c "Add :CFBundleName string 'Daylight Mirror'" \

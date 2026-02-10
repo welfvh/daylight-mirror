@@ -9,3 +9,9 @@ android/app/build/
 android/build/
 android/app/.cxx/
 android/local.properties
+
+# Downloaded platform-tools (adb binary)
+tools/
+
+# bv (beads viewer) local config and caches
+.bv/
