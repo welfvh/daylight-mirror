@@ -115,8 +115,10 @@ class MirrorActivity : Activity() {
     }
 
     /// Called from native code when connection state changes.
-    /// Debounced: disconnect waits 500ms before showing overlay (avoids flicker during reconnect).
-    /// Connect is immediate (hide overlay as soon as frames arrive).
+    /// State machine with asymmetric debounce:
+    ///   connected → disconnected: wait 2s before showing overlay (native reconnect loop is 1s)
+    ///   disconnected → connected: hide overlay immediately
+    ///   reconnecting: show minimal "Reconnecting..." (not the full "Waiting" screen)
     @Suppress("unused")
     fun onConnectionState(connected: Boolean) {
         runOnUiThread {
@@ -133,14 +135,14 @@ class MirrorActivity : Activity() {
                 }
             } else {
                 if (isConnected && pendingDisconnect == null) {
-                    // Delay showing overlay — the native code may reconnect quickly
+                    // Wait 2s before showing overlay — native code reconnects every 1s,
+                    // so transient disconnects are absorbed without any visual flicker.
                     pendingDisconnect = Runnable {
                         isConnected = false
                         pendingDisconnect = null
-                        statusTitle.text = "Daylight Mirror is reconnecting..."
-                        statusHint.text = "1. Check USB cable\n" +
-                            "2. Open Daylight Mirror on Mac\n" +
-                            "3. Start via menu bar or Ctrl+F8"
+                        // Show minimal reconnecting state (no step-by-step hints yet)
+                        statusTitle.text = "Reconnecting..."
+                        statusHint.visibility = View.GONE
                         statusContainer.visibility = View.VISIBLE
                         if (pulseAnimator == null) {
                             pulseAnimator = ObjectAnimator.ofFloat(statusTitle, "alpha", 1f, 0.3f).apply {
@@ -151,8 +153,18 @@ class MirrorActivity : Activity() {
                                 start()
                             }
                         }
+                        // After 8 more seconds of disconnect, escalate to full waiting screen
+                        handler.postDelayed({
+                            if (!isConnected) {
+                                statusTitle.text = "Waiting for Mac..."
+                                statusHint.text = "1. Check USB cable\n" +
+                                    "2. Open Daylight Mirror on Mac\n" +
+                                    "3. Start via menu bar or Ctrl+F8"
+                                statusHint.visibility = View.VISIBLE
+                            }
+                        }, 8000)
                     }
-                    handler.postDelayed(pendingDisconnect!!, 500)
+                    handler.postDelayed(pendingDisconnect!!, 2000)
                 }
             }
         }
