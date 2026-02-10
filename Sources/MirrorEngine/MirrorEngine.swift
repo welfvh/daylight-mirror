@@ -1246,7 +1246,7 @@ public class ControlSocket {
 // MARK: - Mirror Engine
 
 public class MirrorEngine: ObservableObject {
-    public static let appVersion = "1.0.0"
+    public static let appVersion = "1.2.0"
 
     @Published public var status: MirrorStatus = .idle
     @Published public var fps: Double = 0
