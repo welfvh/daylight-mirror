@@ -1,12 +1,14 @@
 # Daylight Mirror
 
+> **Alpha Release** — actively maintained, community-tested, stable enough for daily use.
+
 Turn your [Daylight DC-1](https://daylightcomputer.com) into a real-time external display for your Mac.
 
 ![Daylight DC-1 mirroring a MacBook — both displays showing the same content](images/1-both-on.jpg)
 
-Your Mac renders natively at the Daylight's 4:3 resolution. What you see on the Mac is exactly what appears on the Daylight — every pixel, every frame, with no perceptible delay.
+Your Mac renders natively at the Daylight's 4:3 resolution. What you see on the Mac is exactly what appears on the Daylight — every pixel, every frame.
 
-**30 FPS. Under 10ms latency. Lossless. Zero artifacts.** This is as fast, as clean, and as efficient as a software display mirror can physically be.
+**Low-latency. Lossless. Zero artifacts.** Frame rate varies with screen activity (~13 FPS on static screens, higher with movement) due to macOS compositor optimization. This is as clean and efficient as a software display mirror can be.
 
 ## Download
 
@@ -32,7 +34,7 @@ brew install --cask welfvh/tap/daylight-mirror
 Then install the app on your Daylight (one time):
 
 ```bash
-adb install /opt/homebrew/share/daylight-mirror/DaylightMirror.apk
+adb install /opt/homebrew/share/daylight-mirror/app-debug.apk
 ```
 
 ### GitHub Releases
@@ -110,6 +112,13 @@ All shortcuts use `Ctrl` + function keys:
 The menu bar also has brightness and warmth sliders, a backlight toggle, resolution picker, and live connection stats.
 
 Click **Stop Mirror** or quit the app — your Mac reverts to normal instantly.
+
+## Known Issues & Limitations
+
+- **FPS varies with screen activity** — macOS compositor optimizes dirty-pixel tracking, so static screens update slower (~13 FPS) while active content (video, scrolling) streams faster. This is a macOS limitation, not a bug. A dirty-pixel detection workaround is implemented to maximize throughput.
+- **USB-C only** — no WiFi streaming. The Daylight needs to be physically connected to your Mac.
+- **Requires macOS 14+ and Daylight DC-1 specifically** — this is not a general-purpose Android display solution. It's optimized for the DC-1's hardware and screen characteristics.
+- **Community validation** — external users (including Moritz Bierling) have confirmed basic mirroring works. Please report issues on GitHub.
 
 ### CLI
 
