@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
@@ -22,6 +23,8 @@ import android.view.View
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -68,6 +71,7 @@ class MirrorActivity : Activity() {
     private var suppressTypingWatcher = false
     private var searchModeActive = false
     private var keyboardOpen = false
+    private var lastBackspaceSentAtMs: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,7 +124,20 @@ class MirrorActivity : Activity() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        typingInput = EditText(this).apply {
+        typingInput = object : EditText(this) {
+            override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): InputConnection {
+                val base = super.onCreateInputConnection(outAttrs)
+                return object : InputConnectionWrapper(base, true) {
+                    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                        // Some IMEs emit deleteSurroundingText without key events.
+                        if (beforeLength > 0 && afterLength == 0) {
+                            this@MirrorActivity.sendBackspaceDeduped()
+                        }
+                        return super.deleteSurroundingText(beforeLength, afterLength)
+                    }
+                }
+            }
+        }.apply {
             // Keep a focused input target for IME without a modal dialog UI.
             alpha = 0.01f
             setTextColor(Color.TRANSPARENT)
@@ -149,7 +166,7 @@ class MirrorActivity : Activity() {
                 val lcp = longestCommonPrefix(previousTypedText, current)
                 val deleted = previousTypedText.length - lcp
                 val inserted = current.substring(lcp)
-                repeat(deleted) { commandSender.send("KEY BACKSPACE") }
+                repeat(deleted) { sendBackspaceDeduped() }
                 if (inserted.isNotEmpty()) {
                     commandSender.sendText(inserted)
                 }
@@ -171,6 +188,11 @@ class MirrorActivity : Activity() {
             if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
                 handleEnterPressed()
                 true
+            } else if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DEL) {
+                // Always emit a backspace on key-down for robustness across IMEs.
+                // TextWatcher path is de-duped to avoid double deletes.
+                handleBackspacePressed()
+                false
             } else {
                 false
             }
@@ -446,6 +468,18 @@ class MirrorActivity : Activity() {
         searchModeActive = false
         typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
             android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+    }
+
+    private fun handleBackspacePressed() {
+        sendBackspaceDeduped()
+    }
+
+    private fun sendBackspaceDeduped() {
+        val now = SystemClock.elapsedRealtime()
+        // IMEs may emit multiple delete signals for one keypress (key + surroundingText).
+        if (now - lastBackspaceSentAtMs < 28) return
+        commandSender.send("KEY BACKSPACE")
+        lastBackspaceSentAtMs = now
     }
 
     private fun resetTypingBuffer() {
