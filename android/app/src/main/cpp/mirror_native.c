@@ -168,14 +168,15 @@ static void *mirror_thread(void *arg) {
         addr.sin_port = htons(g_port);
         inet_pton(AF_INET, g_host, &addr.sin_addr);
 
+        LOGI("Connecting to %s:%d ...", g_host, g_port);
         if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-            LOGE("connect() failed: %s", strerror(errno));
+            LOGE("connect() failed: %s (is ADB reverse tunnel set up?)", strerror(errno));
             close(sock);
             sleep(1);
             continue;
         }
 
-        LOGI("Connected to server");
+        LOGI("Connected to server %s:%d", g_host, g_port);
 
         // Notify Kotlin: connected
         if (g_jvm && g_activity) {
@@ -327,6 +328,16 @@ static void *mirror_thread(void *arg) {
             // Render to surface
             if (g_window) {
                 blit_grey_to_surface(g_window, g_current_frame);
+                if (frame_count == 0) {
+                    LOGI("First frame rendered: %ux%u %s (%u bytes compressed)",
+                         g_frame_w, g_frame_h,
+                         (flags & FLAG_KEYFRAME) ? "keyframe" : "delta",
+                         payload_len);
+                }
+            } else {
+                if (frame_count == 0) {
+                    LOGE("Frame received but g_window is NULL — surface not ready");
+                }
             }
             clock_gettime(CLOCK_MONOTONIC, &t4);
 

@@ -1,0 +1,146 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build Mac binary
+        run: |
+          cd server
+          swift build -c release
+
+      - name: Create .app bundle
+        run: |
+          APP_NAME="Daylight Mirror"
+          APP_BUNDLE="build/$APP_NAME.app"
+          BINARY="server/.build/release/DaylightMirror"
+
+          mkdir -p "$APP_BUNDLE/Contents/MacOS"
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
+          cp "$BINARY" "$APP_BUNDLE/Contents/MacOS/DaylightMirror"
+
+          # Update Info.plist with version from tag
+          sed "s/<string>1.0<\/string>/<string>${{ steps.version.outputs.VERSION }}<\/string>/g" Info.plist > "$APP_BUNDLE/Contents/Info.plist"
+
+          cp Resources/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
+          # Ad-hoc codesign (for local distribution)
+          codesign --force --deep -s - "$APP_BUNDLE"
+
+      - name: Create DMG
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "Daylight Mirror ${{ steps.version.outputs.VERSION }}" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Daylight Mirror.app" 175 120 \
+            --hide-extension "Daylight Mirror.app" \
+            --app-drop-link 425 120 \
+            "DaylightMirror-v${{ steps.version.outputs.VERSION }}.dmg" \
+            "build/Daylight Mirror.app" || true
+
+          # Fallback to hdiutil if create-dmg fails
+          if [ ! -f "DaylightMirror-v${{ steps.version.outputs.VERSION }}.dmg" ]; then
+            echo "create-dmg failed, using hdiutil fallback"
+            hdiutil create -volname "Daylight Mirror ${{ steps.version.outputs.VERSION }}" \
+              -srcfolder "build/Daylight Mirror.app" \
+              -ov -format UDZO \
+              "DaylightMirror-v${{ steps.version.outputs.VERSION }}.dmg"
+          fi
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg
+          path: DaylightMirror-v${{ steps.version.outputs.VERSION }}.dmg
+
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Update version in build.gradle.kts
+        run: |
+          cd android/app
+          # Update versionName to match tag
+          sed -i "s/versionName = \"1.0\"/versionName = \"${{ steps.version.outputs.VERSION }}\"/" build.gradle.kts
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             DaylightMirror-v${{ steps.version.outputs.VERSION }}.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: DaylightMirror-v${{ steps.version.outputs.VERSION }}.apk
+
+  create-release:
+    needs: [build-mac, build-android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Download Mac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-dmg
+
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            DaylightMirror-v${{ steps.version.outputs.VERSION }}.dmg
+            DaylightMirror-v${{ steps.version.outputs.VERSION }}.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

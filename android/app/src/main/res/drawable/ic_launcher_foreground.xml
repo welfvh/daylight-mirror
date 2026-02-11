@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Simple monitor/display icon for e-ink aesthetic -->
+    <!-- Screen outline -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M28,26 L80,26 L80,64 L28,64 Z M32,30 L76,30 L76,60 L32,60 Z"/>
+
+    <!-- Stand base -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M50,64 L58,64 L58,72 L66,72 L66,76 L42,76 L42,72 L50,72 Z"/>
+
+    <!-- Inner detail - simplified reflection -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M36,34 L44,34 L44,36 L36,36 Z"/>
+</vector>
