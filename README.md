@@ -2,7 +2,7 @@
 
 Turn your [Daylight DC-1](https://daylightcomputer.com) into a real-time external display for your Mac.
 
-![Daylight DC-1 mirroring a MacBook — both displays showing the same content](images/1-both-on.jpg)
+![Daylight DC-1 mirroring a MacBook — both displays showing the same content](docs/images/1-both-on.jpg)
 
 Your Mac renders natively at the Daylight's 4:3 resolution. What you see on the Mac is exactly what appears on the Daylight — every pixel, every frame, with no perceptible delay.
 
@@ -83,7 +83,7 @@ On first launch, macOS needs two permissions. The app will guide you through thi
 
 That's it. Your Mac switches to 4:3, and the Daylight lights up.
 
-![Menu bar popover — live stats, brightness and warmth sliders, backlight toggle](images/2-menu-bar.jpg)
+![Menu bar popover — live stats, brightness and warmth sliders, backlight toggle](docs/images/2-menu-bar.jpg)
 
 ### Resolution
 
@@ -134,11 +134,11 @@ This means any script or tool (including AI agents) can control the Daylight pro
 
 ## Fidelity
 
-![Close-up of the Daylight displaying the GitHub README — pixel-perfect text](images/3-fidelity.jpg)
+![Close-up of the Daylight displaying the GitHub README — pixel-perfect text](docs/images/3-fidelity.jpg)
 
 What you see above is the Daylight rendering this README, mirrored from the Mac. Every character is pixel-identical to what the Mac displays. There's no JPEG compression, no dithering, no interpolation — just a direct greyscale conversion applied identically on both sides.
 
-![The Daylight as a standalone display — Mac screen off, USB-C connected](images/4-mac-off.jpg)
+![The Daylight as a standalone display — Mac screen off, USB-C connected](docs/images/4-mac-off.jpg)
 
 ## How it works
 
