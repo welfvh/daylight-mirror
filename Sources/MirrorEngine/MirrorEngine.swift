@@ -32,22 +32,50 @@ let KEYFRAME_INTERVAL: Int = 30
 //   sharpenAmount (0.0-3.0): spatial sharpening via Laplacian kernel
 //   contrastAmount (1.0-2.0): linear contrast stretch around midpoint
 
-// Resolution presets (all 4:3, matching Daylight DC-1's native 1600x1200 panel).
-// Cozy uses HiDPI (2x): macOS renders at 800x600 logical points with 1600x1200 backing
+// Resolution presets matching Daylight DC-1's native 1600x1200 panel.
+// Landscape presets are 4:3. Portrait presets are 3:4 (1200x1600 native).
+// Cozy variants use HiDPI (2x): macOS renders at half logical points with full backing
 // pixels — big UI, full native sharpness. Other presets are non-HiDPI 1:1 pixel modes.
 public enum DisplayResolution: String, CaseIterable, Identifiable {
+    // Landscape (4:3)
     case cozy        = "800x600"    // HiDPI 2x: 800x600pt → 1600x1200px — large UI, native sharpness
     case comfortable = "1024x768"   // Larger UI, easy on the eyes
     case balanced    = "1280x960"   // Good balance of size and sharpness
     case sharp       = "1600x1200"  // Maximum sharpness, smaller UI (1:1 native)
+    // Portrait (3:4)
+    case portraitCozy     = "600x800"    // HiDPI 2x: 600x800pt → 1200x1600px — large UI, native sharpness
+    case portraitBalanced = "960x1280"   // Good balance of size and sharpness
+    case portraitSharp    = "1200x1600"  // Maximum sharpness, smaller UI (1:1 native)
 
     public var id: String { rawValue }
     /// Pixel dimensions captured by SCStream and sent to the Daylight.
-    public var width: UInt { switch self { case .cozy: 1600; case .comfortable: 1024; case .balanced: 1280; case .sharp: 1600 } }
-    public var height: UInt { switch self { case .cozy: 1200; case .comfortable: 768; case .balanced: 960; case .sharp: 1200 } }
-    public var label: String { switch self { case .cozy: "Cozy"; case .comfortable: "Comfortable"; case .balanced: "Balanced"; case .sharp: "Sharp" } }
+    public var width: UInt {
+        switch self {
+        case .cozy: 1600; case .comfortable: 1024; case .balanced: 1280; case .sharp: 1600
+        case .portraitCozy: 1200; case .portraitBalanced: 960; case .portraitSharp: 1200
+        }
+    }
+    public var height: UInt {
+        switch self {
+        case .cozy: 1200; case .comfortable: 768; case .balanced: 960; case .sharp: 1200
+        case .portraitCozy: 1600; case .portraitBalanced: 1280; case .portraitSharp: 1600
+        }
+    }
+    public var label: String {
+        switch self {
+        case .cozy: "Cozy"; case .comfortable: "Comfortable"; case .balanced: "Balanced"; case .sharp: "Sharp"
+        case .portraitCozy: "Portrait Cozy"; case .portraitBalanced: "Portrait Balanced"; case .portraitSharp: "Portrait Sharp"
+        }
+    }
     /// Whether the virtual display uses HiDPI (2x) scaling.
-    public var isHiDPI: Bool { switch self { case .cozy: true; default: false } }
+    public var isHiDPI: Bool { switch self { case .cozy, .portraitCozy: true; default: false } }
+    /// Whether this is a portrait (vertical) orientation preset.
+    public var isPortrait: Bool {
+        switch self {
+        case .portraitCozy, .portraitBalanced, .portraitSharp: true
+        default: false
+        }
+    }
 }
 
 // Protocol constants
@@ -66,6 +94,7 @@ let WARMTH_STEP: Int = 20
 
 public enum MirrorStatus: Equatable {
     case idle
+    case waitingForDevice
     case starting
     case running
     case stopping
@@ -75,22 +104,50 @@ public enum MirrorStatus: Equatable {
 // MARK: - ADB Bridge
 
 struct ADBBridge {
-    static func isAvailable() -> Bool {
+    /// Resolved path to the adb binary. Checks bundled copy first, then PATH.
+    private static let resolvedADBPath: String? = {
+        // 1. Bundled adb inside the .app bundle (Resources/adb)
+        if let bundled = Bundle.main.resourcePath.map({ $0 + "/adb" }),
+           FileManager.default.isExecutableFile(atPath: bundled) {
+            print("[ADB] Using bundled adb: \(bundled)")
+            return bundled
+        }
+        // 2. Fallback: find adb on PATH (e.g. Homebrew install)
+        let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["which", "adb"]
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         try? process.run()
         process.waitUntilExit()
-        return process.terminationStatus == 0
+        if process.terminationStatus == 0,
+           let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            print("[ADB] Using system adb: \(path)")
+            return path
+        }
+        print("[ADB] No adb binary found (checked bundle + PATH)")
+        return nil
+    }()
+
+    /// Create a Process configured to run adb with the given arguments.
+    private static func makeADBProcess(_ arguments: [String]) -> Process? {
+        guard let adbPath = resolvedADBPath else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: adbPath)
+        process.arguments = arguments
+        return process
+    }
+
+    static func isAvailable() -> Bool {
+        return resolvedADBPath != nil
     }
 
     static func connectedDevice() -> String? {
         let pipe = Pipe()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["adb", "devices"]
+        guard let process = makeADBProcess(["devices"]) else { return nil }
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         try? process.run()
@@ -107,9 +164,7 @@ struct ADBBridge {
 
     @discardableResult
     static func setupReverseTunnel(port: UInt16) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["adb", "reverse", "tcp:\(port)", "tcp:\(port)"]
+        guard let process = makeADBProcess(["reverse", "tcp:\(port)", "tcp:\(port)"]) else { return false }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
@@ -119,9 +174,7 @@ struct ADBBridge {
 
     @discardableResult
     static func removeReverseTunnel(port: UInt16) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["adb", "reverse", "--remove", "tcp:\(port)"]
+        guard let process = makeADBProcess(["reverse", "--remove", "tcp:\(port)"]) else { return false }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
@@ -131,9 +184,7 @@ struct ADBBridge {
 
     static func querySystemSetting(_ setting: String) -> Int? {
         let pipe = Pipe()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["adb", "shell", "settings", "get", "system", setting]
+        guard let process = makeADBProcess(["shell", "settings", "get", "system", setting]) else { return nil }
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         try? process.run()
@@ -146,20 +197,54 @@ struct ADBBridge {
     }
 
     static func setSystemSetting(_ setting: String, value: Int) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["adb", "shell", "settings", "put", "system", setting, "\(value)"]
+        guard let process = makeADBProcess(["shell", "settings", "put", "system", setting, "\(value)"]) else { return }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
     }
 
+    /// Check if the companion Android app is installed on the connected device.
+    static func isAppInstalled() -> Bool {
+        let pipe = Pipe()
+        guard let process = makeADBProcess(["shell", "pm", "list", "packages", "com.daylight.mirror"]) else { return false }
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return output.contains("package:com.daylight.mirror")
+    }
+
+    /// Install the bundled APK onto the connected device.
+    /// Returns nil on success, or an error message on failure.
+    static func installBundledAPK() -> String? {
+        guard let resourcePath = Bundle.main.resourcePath else {
+            return "No resource path in bundle"
+        }
+        let apkPath = resourcePath + "/app-debug.apk"
+        guard FileManager.default.fileExists(atPath: apkPath) else {
+            return "No bundled APK found"
+        }
+        let pipe = Pipe()
+        guard let process = makeADBProcess(["install", "-r", apkPath]) else {
+            return "ADB not available"
+        }
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try? process.run()
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 {
+            return "Install failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))"
+        }
+        print("[ADB] Installed bundled APK successfully")
+        return nil
+    }
+
     /// Launch the Daylight Mirror Android app on the connected device.
     static func launchApp() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["adb", "shell", "am", "start", "-n",
-                             "com.daylight.mirror/.MirrorActivity"]
+        guard let process = makeADBProcess(["shell", "am", "start", "-n",
+                             "com.daylight.mirror/.MirrorActivity"]) else { return }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
@@ -328,33 +413,36 @@ class TCPServer {
                 switch state {
                 case .ready:
                     print("[TCP] Client connected")
+                    // Add to connections and notify only when truly ready
+                    self.lock.lock()
+                    self.connections.append(conn)
+                    let count = self.connections.count
+                    let cachedKeyframe = self.lastKeyframeData
+                    self.lock.unlock()
+                    self.onClientCountChanged?(count)
+
+                    // Tell client our frame dimensions before sending any frames
+                    self.sendResolution(to: conn)
+
+                    if let kf = cachedKeyframe {
+                        conn.send(content: kf, completion: .contentProcessed { _ in })
+                        print("[TCP] Sent cached keyframe (\(kf.count) bytes)")
+                    } else {
+                        print("[TCP] No cached keyframe yet — client will get next broadcast keyframe")
+                    }
+
+                    self.receiveLoop(conn)
                 case .failed, .cancelled:
                     self.lock.lock()
                     self.connections.removeAll { $0 === conn }
                     let count = self.connections.count
                     self.lock.unlock()
                     self.onClientCountChanged?(count)
-                    print("[TCP] Client disconnected")
+                    print("[TCP] Client disconnected (\(state))")
                 default: break
                 }
             }
             conn.start(queue: self.queue)
-            self.lock.lock()
-            self.connections.append(conn)
-            let count = self.connections.count
-            let cachedKeyframe = self.lastKeyframeData
-            self.lock.unlock()
-            self.onClientCountChanged?(count)
-
-            // Tell client our frame dimensions before sending any frames
-            self.sendResolution(to: conn)
-
-            if let kf = cachedKeyframe {
-                conn.send(content: kf, completion: .contentProcessed { _ in })
-                print("[TCP] Sent cached keyframe (\(kf.count) bytes)")
-            }
-
-            self.receiveLoop(conn)
         }
 
         listener.start(queue: queue)
@@ -587,13 +675,24 @@ class HTTPServer {
 /// completely imperceptible on any display, especially e-ink. Positioned at
 /// (0, maxY-1) to hide under the menu bar.
 ///
-/// Uses CADisplayLink (macOS 14+) for vsync-aligned timing. The 1x1 dirty
-/// region has essentially zero compositing cost — WindowServer already checks
-/// for dirty regions every frame, we just ensure it always finds one.
+/// Uses CADisplayLink (macOS 14+) for vsync-aligned timing. The 4x4 dirty
+/// region forces WindowServer to recomposite the target display every frame.
+///
+/// IMPORTANT: The dirty-pixel window must live on the virtual display's
+/// NSScreen, not NSScreen.main. If the window is on the built-in display,
+/// only that display's compositor sees dirty regions — the virtual display
+/// compositor stays idle and SCStream delivers frames at ~13 FPS.
 class CompositorPacer {
     private var window: NSWindow?
     private var displayLink: CADisplayLink?
+    private var timer: DispatchSourceTimer?
     private var toggle = false
+    private let targetDisplayID: CGDirectDisplayID
+    private var tickCount: UInt64 = 0
+
+    init(targetDisplayID: CGDirectDisplayID) {
+        self.targetDisplayID = targetDisplayID
+    }
 
     func start() {
         DispatchQueue.main.async { [weak self] in
@@ -601,9 +700,26 @@ class CompositorPacer {
         }
     }
 
+    /// Find the NSScreen matching a CGDirectDisplayID.
+    private func screenForDisplay(_ displayID: CGDirectDisplayID) -> NSScreen? {
+        for screen in NSScreen.screens {
+            if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+               screenNumber == displayID {
+                return screen
+            }
+        }
+        return nil
+    }
+
     private func startOnMain() {
+        // Find the virtual display's NSScreen; fall back to main
+        let targetScreen = screenForDisplay(targetDisplayID)
+        let screen = targetScreen ?? NSScreen.main
+        let onVirtual = targetScreen != nil
+
+        // 4x4 dirty region — above any per-pixel compositing threshold
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+            contentRect: NSRect(x: 0, y: 0, width: 4, height: 4),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
@@ -611,42 +727,86 @@ class CompositorPacer {
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = true
-        window.level = .screenSaver + 1
+        window.level = .normal
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
         window.backgroundColor = NSColor(red: 0, green: 0, blue: 0, alpha: 1)
 
-        // Position under the menu bar on the main screen
-        if let screen = NSScreen.main {
-            window.setFrameOrigin(NSPoint(x: 0, y: screen.frame.maxY - 1))
+        // Position at top-left corner of the target screen
+        if let s = screen {
+            window.setFrameOrigin(NSPoint(x: s.frame.minX, y: s.frame.maxY - 4))
         }
         window.orderFrontRegardless()
         self.window = window
 
-        // CADisplayLink (macOS 14+) for vsync-aligned ticking
-        let displayLink = NSScreen.main!.displayLink(target: self, selector: #selector(tick))
-        displayLink.preferredFrameRateRange = CAFrameRateRange(
-            minimum: 30, maximum: 60, preferred: 30
-        )
-        displayLink.add(to: .main, forMode: .common)
-        self.displayLink = displayLink
+        // Use CADisplayLink from the target screen for vsync-aligned ticking.
+        // If virtual display has no NSScreen (mirror mode), use a timer at 30Hz.
+        if let targetScreen = targetScreen {
+            let dl = targetScreen.displayLink(target: self, selector: #selector(tick))
+            dl.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 30, maximum: 60, preferred: 30
+            )
+            dl.add(to: .main, forMode: .common)
+            self.displayLink = dl
+            print("[Pacer] Started on virtual display \(targetDisplayID) (CADisplayLink, 4x4)")
+        } else {
+            // Fallback: DispatchSourceTimer at ~30Hz
+            let t = DispatchSource.makeTimerSource(queue: .main)
+            t.schedule(deadline: .now(), repeating: .milliseconds(33))
+            t.setEventHandler { [weak self] in
+                self?.timerTick()
+            }
+            t.resume()
+            self.timer = t
+            print("[Pacer] Started on main screen (timer fallback, 4x4) — virtual display \(targetDisplayID) has no NSScreen")
+        }
 
-        print("[Pacer] Compositor pacer started (1x1 dirty pixel @ 30Hz)")
+        print("[Pacer] Target display: \(targetDisplayID), on virtual screen: \(onVirtual)")
     }
 
     @objc private func tick(_ link: CADisplayLink) {
+        performToggle()
+    }
+
+    private func timerTick() {
+        performToggle()
+    }
+
+    private func performToggle() {
         toggle.toggle()
         window?.backgroundColor = toggle
             ? NSColor(red: 0, green: 0, blue: 0, alpha: 1)
             : NSColor(red: 1.0 / 255.0, green: 0, blue: 0, alpha: 1)
+        tickCount += 1
+        if tickCount % 150 == 0 {
+            print("[Pacer] \(tickCount) ticks (~\(tickCount / 30)s)")
+        }
     }
 
     func stop() {
         DispatchQueue.main.async { [weak self] in
             self?.displayLink?.invalidate()
             self?.displayLink = nil
+            self?.timer?.cancel()
+            self?.timer = nil
             self?.window?.close()
             self?.window = nil
             print("[Pacer] Compositor pacer stopped")
+        }
+    }
+}
+
+// MARK: - Screen Capture Errors
+
+enum ScreenCaptureError: LocalizedError {
+    case permissionDenied
+    case contentEnumerationFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "Screen Recording permission not granted. Open System Settings > Privacy & Security > Screen Recording and enable Daylight Mirror, then restart the app."
+        case .contentEnumerationFailed(let underlying):
+            return "Could not access screen content (permission may be pending). Grant Screen Recording in System Settings and retry. (\(underlying.localizedDescription))"
         }
     }
 }
@@ -697,7 +857,17 @@ class ScreenCapture: NSObject, SCStreamOutput {
     }
 
     func start() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // Pre-check screen recording permission to avoid opaque SCStream crashes
+        guard CGPreflightScreenCaptureAccess() else {
+            throw ScreenCaptureError.permissionDenied
+        }
+
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            throw ScreenCaptureError.contentEnumerationFailed(error)
+        }
 
         guard let display = content.displays.first(where: {
             $0.displayID == targetDisplayID
@@ -1227,12 +1397,14 @@ public class ControlSocket {
 
         case "RESOLUTION":
             if let arg = arg {
-                // Accept both preset names ("sharp") and raw values ("1600x1200")
+                // Accept preset names ("sharp", "portrait-cozy"), raw values ("1600x1200"),
+                // and hyphenated/spaced variants of multi-word labels.
+                let normalizedArg = arg.lowercased().replacingOccurrences(of: "-", with: " ")
                 let preset = DisplayResolution.allCases.first {
-                    $0.rawValue == arg || $0.label.lowercased() == arg.lowercased()
+                    $0.rawValue == arg || $0.label.lowercased() == normalizedArg
                 }
                 guard let newRes = preset else {
-                    let valid = DisplayResolution.allCases.map { $0.label.lowercased() }.joined(separator: ", ")
+                    let valid = DisplayResolution.allCases.map { $0.label.lowercased().replacingOccurrences(of: " ", with: "-") }.joined(separator: ", ")
                     return "ERR unknown resolution (valid: \(valid))"
                 }
                 if newRes == engine.resolution {
@@ -1284,6 +1456,7 @@ public class ControlSocket {
             let s: String
             switch engine.status {
             case .idle: s = "idle"
+            case .waitingForDevice: s = "waiting_for_device"
             case .starting: s = "starting"
             case .running: s = "running"
             case .stopping: s = "stopping"
@@ -1345,6 +1518,49 @@ public class ControlSocket {
     }
 }
 
+// MARK: - USB Device Monitor (ADB polling)
+
+/// Polls `adb devices` every 2 seconds to detect USB connect/disconnect.
+/// Calls onDeviceConnected/onDeviceDisconnected on the main queue when state changes.
+class USBDeviceMonitor {
+    private var timer: DispatchSourceTimer?
+    private var wasConnected = false
+    var onDeviceConnected: (() -> Void)?
+    var onDeviceDisconnected: (() -> Void)?
+
+    func start() {
+        guard ADBBridge.isAvailable() else {
+            print("[USB] No adb available — device monitoring disabled")
+            return
+        }
+        let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        t.schedule(deadline: .now(), repeating: .seconds(2))
+        t.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let connected = ADBBridge.connectedDevice() != nil
+            if connected && !self.wasConnected {
+                self.wasConnected = true
+                print("[USB] Device connected")
+                DispatchQueue.main.async { self.onDeviceConnected?() }
+            } else if !connected && self.wasConnected {
+                self.wasConnected = false
+                print("[USB] Device disconnected")
+                DispatchQueue.main.async { self.onDeviceDisconnected?() }
+            }
+        }
+        t.resume()
+        timer = t
+        print("[USB] Device monitoring started (polling adb every 2s)")
+    }
+
+    func stop() {
+        timer?.cancel()
+        timer = nil
+    }
+
+    var isDeviceConnected: Bool { wasConnected }
+}
+
 // MARK: - Mirror Engine
 
 public class MirrorEngine: ObservableObject {
@@ -1360,6 +1576,7 @@ public class MirrorEngine: ObservableObject {
     @Published public var warmth: Int = 128
     @Published public var backlightOn: Bool = true
     @Published public var adbConnected: Bool = false
+    @Published public var apkInstallStatus: String = ""  // Empty = idle, "Installing..." = in progress, "Installed" = done, or error
     @Published public var clientCount: Int = 0
     @Published public var totalFrames: Int = 0
     @Published public var frameSizeKB: Int = 0
@@ -1378,6 +1595,7 @@ public class MirrorEngine: ObservableObject {
         }
     }
     @Published public var fontSmoothingDisabled: Bool = false
+    @Published public var deviceDetected: Bool = false
     @Published public var updateVersion: String? = nil
     @Published public var updateURL: String? = nil
     @Published public var resolution: DisplayResolution {
@@ -1392,7 +1610,12 @@ public class MirrorEngine: ObservableObject {
     private var displayController: DisplayController?
     private var compositorPacer: CompositorPacer?
     private var controlSocket: ControlSocket?
+    private var usbMonitor: USBDeviceMonitor?
     private var savedMacBrightness: Float?   // Mac brightness before auto-dim
+    /// When true, auto-start/stop mirroring based on USB device state.
+    @Published public var autoMirrorEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(autoMirrorEnabled, forKey: "autoMirrorEnabled") }
+    }
 
     public init() {
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
@@ -1401,6 +1624,9 @@ public class MirrorEngine: ObservableObject {
         self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.0
         let savedContrast = UserDefaults.standard.double(forKey: "contrastAmount")
         self.contrastAmount = savedContrast > 0 ? savedContrast : 1.0
+        if UserDefaults.standard.object(forKey: "autoMirrorEnabled") != nil {
+            self.autoMirrorEnabled = UserDefaults.standard.bool(forKey: "autoMirrorEnabled")
+        }
         NSLog("[MirrorEngine] init, resolution: %@, sharpen: %.1f, contrast: %.1f",
               resolution.rawValue, sharpenAmount, contrastAmount)
 
@@ -1411,6 +1637,40 @@ public class MirrorEngine: ObservableObject {
             let sock = ControlSocket(engine: self)
             sock.start()
             self.controlSocket = sock
+        }
+
+        // USB device monitoring — auto-detect DC-1 connect/disconnect
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let monitor = USBDeviceMonitor()
+            monitor.onDeviceConnected = { [weak self] in
+                guard let self = self else { return }
+                self.deviceDetected = true
+                if self.autoMirrorEnabled && self.status == .idle {
+                    NSLog("[USB] Device connected — auto-starting mirror")
+                    Task { @MainActor in await self.start() }
+                } else if self.autoMirrorEnabled && self.status == .waitingForDevice {
+                    NSLog("[USB] Device connected — starting mirror")
+                    self.status = .idle  // Reset from waiting state
+                    Task { @MainActor in await self.start() }
+                } else if self.status == .running {
+                    NSLog("[USB] Device reconnected — re-establishing tunnel")
+                    self.reconnect()
+                }
+            }
+            monitor.onDeviceDisconnected = { [weak self] in
+                guard let self = self else { return }
+                self.deviceDetected = false
+                if self.autoMirrorEnabled && self.status == .running {
+                    NSLog("[USB] Device disconnected — stopping mirror")
+                    self.stop()
+                    self.status = .waitingForDevice
+                }
+            }
+            monitor.start()
+            self.usbMonitor = monitor
+            // Set initial device state
+            self.deviceDetected = monitor.isDeviceConnected
         }
 
         // Check for updates in the background
@@ -1461,7 +1721,7 @@ public class MirrorEngine: ObservableObject {
         DispatchQueue.main.async {
             if self.status == .running {
                 self.stop()
-            } else if self.status == .idle {
+            } else if self.status == .idle || self.status == .waitingForDevice {
                 Task { @MainActor in
                     await self.start()
                 }
@@ -1531,15 +1791,12 @@ public class MirrorEngine: ObservableObject {
 
         status = .starting
 
-        // 1. ADB — optional (mirror works over WiFi too)
-        if ADBBridge.isAvailable(), let device = ADBBridge.connectedDevice() {
-            print("ADB device: \(device)")
-            ADBBridge.setupReverseTunnel(port: TCP_PORT)
-            ADBBridge.launchApp()
-            adbConnected = true
+        // 1. Check for ADB device (but don't set up tunnel yet — server must be listening first)
+        let hasADBDevice = ADBBridge.isAvailable() && ADBBridge.connectedDevice() != nil
+        if hasADBDevice {
+            print("ADB device: \(ADBBridge.connectedDevice()!)")
         } else {
             print("No ADB device (mirror will wait for TCP connection)")
-            adbConnected = false
         }
 
         // 2. Virtual display at selected resolution
@@ -1553,8 +1810,8 @@ public class MirrorEngine: ObservableObject {
         try? await Task.sleep(for: .seconds(1))
 
         // 3b. Compositor pacer — forces SCStream to deliver 30fps instead of ~13fps.
-        // A 1x1 invisible pixel toggle tricks WindowServer into continuous recompositing.
-        let pacer = CompositorPacer()
+        // Dirty-pixel window must be on the VIRTUAL display's screen to trigger its compositor.
+        let pacer = CompositorPacer(targetDisplayID: displayManager!.displayID)
         pacer.start()
         compositorPacer = pacer
 
@@ -1600,6 +1857,35 @@ public class MirrorEngine: ObservableObject {
             return
         }
 
+        // 4b. ADB tunnel + auto-install APK + launch (AFTER server is listening)
+        if hasADBDevice {
+            // Auto-install bundled APK if the companion app isn't on the device yet
+            if !ADBBridge.isAppInstalled() {
+                apkInstallStatus = "Installing companion app..."
+                print("[ADB] Companion app not found, installing bundled APK...")
+                if let error = ADBBridge.installBundledAPK() {
+                    apkInstallStatus = "APK install failed: \(error)"
+                    print("[ADB] APK install error: \(error)")
+                } else {
+                    apkInstallStatus = "Installed"
+                    print("[ADB] Companion app installed")
+                }
+            }
+
+            let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
+            if tunnelOK {
+                print("[ADB] Reverse tunnel tcp:\(TCP_PORT) established")
+                ADBBridge.launchApp()
+                adbConnected = true
+                apkInstallStatus = ""  // Clear status on success
+            } else {
+                print("[ADB] WARNING: Reverse tunnel failed — DC-1 cannot reach Mac on port \(TCP_PORT)")
+                adbConnected = false
+            }
+        } else {
+            adbConnected = false
+        }
+
         // 5. Capture
         let cap = ScreenCapture(
             tcpServer: tcpServer!, wsServer: wsServer!,
@@ -1622,9 +1908,18 @@ public class MirrorEngine: ObservableObject {
 
         do {
             try await cap.start()
+        } catch let error as ScreenCaptureError {
+            status = .error(error.localizedDescription)
+            compositorPacer?.stop(); compositorPacer = nil
+            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop()
+            tcpServer = nil; wsServer = nil; httpServer = nil
+            displayManager = nil
+            return
         } catch {
             status = .error("Capture failed: \(error.localizedDescription)")
+            compositorPacer?.stop(); compositorPacer = nil
             tcpServer?.stop(); wsServer?.stop(); httpServer?.stop()
+            tcpServer = nil; wsServer = nil; httpServer = nil
             displayManager = nil
             return
         }
@@ -1658,7 +1953,8 @@ public class MirrorEngine: ObservableObject {
     }
 
     public func stop() {
-        guard status == .running else { return }
+        guard status == .running || status == .waitingForDevice else { return }
+        if status == .waitingForDevice { status = .idle; return }
         DispatchQueue.main.async { self.status = .stopping }
 
         // Restore Mac brightness before tearing down
@@ -1717,10 +2013,16 @@ public class MirrorEngine: ObservableObject {
         guard status == .running else { return }
         print("[MirrorEngine] Reconnecting ADB...")
         Task.detached {
-            ADBBridge.setupReverseTunnel(port: TCP_PORT)
-            ADBBridge.launchApp()
-            await MainActor.run { self.adbConnected = true }
-            print("[MirrorEngine] Reconnect done — tunnel + app relaunched")
+            let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
+            if tunnelOK {
+                print("[ADB] Reverse tunnel re-established")
+                ADBBridge.launchApp()
+                await MainActor.run { self.adbConnected = true }
+                print("[MirrorEngine] Reconnect done — tunnel + app relaunched")
+            } else {
+                print("[ADB] WARNING: Reverse tunnel failed on reconnect")
+                await MainActor.run { self.adbConnected = false }
+            }
         }
     }
 

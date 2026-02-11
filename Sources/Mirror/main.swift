@@ -8,7 +8,7 @@
 //   daylight-mirror brightness [0-255] — Get or set Daylight brightness
 //   daylight-mirror warmth [0-255]     — Get or set Daylight warmth (amber rate)
 //   daylight-mirror backlight [on|off|toggle] — Get or toggle backlight
-//   daylight-mirror resolution [comfortable|balanced|sharp] — Get or set resolution
+//   daylight-mirror resolution [preset] — Get or set resolution (incl. portrait variants)
 //   daylight-mirror restart            — Full stop + start cycle
 //
 // The engine (whether started by this CLI or the GUI menu bar app) exposes a
@@ -245,6 +245,7 @@ func commandStart() {
 
                 switch engine.status {
                 case .idle: currentStatus = "idle"
+                case .waitingForDevice: currentStatus = "waiting_for_device"
                 case .starting: currentStatus = "starting"
                 case .running: currentStatus = "running"
                 case .stopping: currentStatus = "stopping"
@@ -456,7 +457,8 @@ func printUsage() {
     print("  brightness [0-255]       Get or set Daylight brightness")
     print("  warmth [0-255]           Get or set Daylight warmth (amber rate)")
     print("  backlight [on|off|toggle] Get or toggle backlight")
-    print("  resolution [preset]      Get or set resolution (cozy, comfortable, balanced, sharp)")
+    print("  resolution [preset]      Get or set resolution (cozy, comfortable, balanced, sharp,")
+    print("                             portrait-cozy, portrait-balanced, portrait-sharp)")
     print("  sharpen [0.0-3.0]        Get or set sharpening (0=none, 1=mild, 2=strong)")
     print("  contrast [1.0-2.0]       Get or set contrast (1.0=off, 1.5=moderate, 2.0=high)")
     print("  fontsmoothing [on|off]   Get or set macOS font smoothing (off = crisper text)")

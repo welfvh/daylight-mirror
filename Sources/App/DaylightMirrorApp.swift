@@ -74,14 +74,26 @@ struct DaylightMirrorApp: App {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "display")
-                if delegate.engine.status == .running {
+                if let color = menuBarDotColor(delegate.engine.status) {
                     Circle()
-                        .fill(.green)
+                        .fill(color)
                         .frame(width: 6, height: 6)
                 }
             }
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// Maps engine status to a menu bar dot color.
+    /// Returns nil for idle (no dot shown).
+    func menuBarDotColor(_ status: MirrorStatus) -> Color? {
+        switch status {
+        case .running:                      return .green
+        case .waitingForDevice,
+             .starting, .stopping:          return .orange
+        case .error:                        return .red
+        case .idle:                         return nil
+        }
     }
 }
 
@@ -535,6 +547,8 @@ struct MirrorMenuView: View {
             switch engine.status {
             case .running:
                 runningView
+            case .waitingForDevice:
+                waitingForDeviceView
             case .starting:
                 startingView
             case .stopping:
@@ -615,6 +629,7 @@ struct MirrorMenuView: View {
     var statusColor: Color {
         switch engine.status {
         case .idle: return .gray
+        case .waitingForDevice: return .orange
         case .starting, .stopping: return .orange
         case .running: return .green
         case .error: return .red
@@ -624,6 +639,7 @@ struct MirrorMenuView: View {
     var statusText: String {
         switch engine.status {
         case .idle: return "Idle"
+        case .waitingForDevice: return "Waiting for DC-1"
         case .starting: return "Starting"
         case .running: return "Running"
         case .stopping: return "Stopping"
@@ -783,6 +799,16 @@ struct MirrorMenuView: View {
 
         Divider()
 
+        // Auto-reconnect toggle
+        Toggle(isOn: $engine.autoMirrorEnabled) {
+            Label("Auto-reconnect on USB", systemImage: "cable.connector")
+                .font(.caption)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+
+        Divider()
+
         // Reconnect / Restart / Stop
         HStack(spacing: 6) {
             Button(action: { engine.reconnect() }) {
@@ -807,6 +833,34 @@ struct MirrorMenuView: View {
 
             Button(action: { engine.stop() }) {
                 Text("Stop")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    // MARK: - Waiting for Device View
+
+    @ViewBuilder
+    var waitingForDeviceView: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "cable.connector")
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connect your Daylight")
+                        .font(.callout.weight(.medium))
+                    Text("Plug in a USB-C cable to start mirroring automatically")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: { engine.stop() }) {
+                Text("Cancel")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
@@ -848,10 +902,16 @@ struct MirrorMenuView: View {
     @ViewBuilder
     var idleView: some View {
         VStack(spacing: 8) {
-            Text("Mirror your Mac to a Daylight DC-1")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Device detection status
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(engine.deviceDetected ? .green : .gray)
+                    .frame(width: 6, height: 6)
+                Text(engine.deviceDetected ? "DC-1 detected via USB" : "No device connected")
+                    .font(.caption)
+                    .foregroundStyle(engine.deviceDetected ? .primary : .secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Divider()
 
@@ -867,7 +927,13 @@ struct MirrorMenuView: View {
 
             Divider()
 
-            Button(action: { Task { await engine.start() } }) {
+            Button(action: {
+                if !MirrorEngine.hasScreenRecordingPermission() {
+                    showSetup()
+                } else {
+                    Task { await engine.start() }
+                }
+            }) {
                 Text("Start Mirror")
                     .frame(maxWidth: .infinity)
             }
