@@ -6,18 +6,24 @@ package com.daylight.mirror
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Activity
+import android.text.Editable
+import android.text.TextWatcher
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.inputmethod.InputMethodManager
+import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -38,6 +44,7 @@ class MirrorActivity : Activity() {
         private const val INPUT_MOVE: Byte = 0x02
         private const val INPUT_UP: Byte = 0x03
         private const val INPUT_SCROLL: Byte = 0x04
+        private const val INPUT_CMD_PORT = 8893
     }
 
     private external fun nativeStart(surface: Surface, host: String, port: Int)
@@ -51,10 +58,16 @@ class MirrorActivity : Activity() {
     private var isConnected = false
     private var pendingDisconnect: Runnable? = null
     private lateinit var touchSender: TouchSender
+    private lateinit var commandSender: CommandSender
     private var activePointerId: Int = -1
     private var inScrollMode = false
     private var lastScrollX = 0f
     private var lastScrollY = 0f
+    private lateinit var typingInput: EditText
+    private var previousTypedText = ""
+    private var suppressTypingWatcher = false
+    private var searchModeActive = false
+    private var keyboardOpen = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,8 +120,122 @@ class MirrorActivity : Activity() {
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
+        typingInput = EditText(this).apply {
+            // Keep a focused input target for IME without a modal dialog UI.
+            alpha = 0.01f
+            setTextColor(Color.TRANSPARENT)
+            setBackgroundColor(Color.TRANSPARENT)
+            maxLines = 1
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+                android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+        }
+        typingInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressTypingWatcher) return
+                val current = s?.toString() ?: ""
+                if (current.contains('\n')) {
+                    // Some keyboards emit newline text instead of IME action callbacks.
+                    val sanitized = current.replace("\n", "")
+                    suppressTypingWatcher = true
+                    typingInput.setText(sanitized)
+                    typingInput.setSelection(typingInput.text.length)
+                    suppressTypingWatcher = false
+                    previousTypedText = sanitized
+                    handleEnterPressed()
+                    return
+                }
+                val lcp = longestCommonPrefix(previousTypedText, current)
+                val deleted = previousTypedText.length - lcp
+                val inserted = current.substring(lcp)
+                repeat(deleted) { commandSender.send("KEY BACKSPACE") }
+                if (inserted.isNotEmpty()) {
+                    commandSender.sendText(inserted)
+                }
+                previousTypedText = current
+            }
+        })
+        typingInput.setOnEditorActionListener { _, actionId, event ->
+            val imeEnter = actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            val keyEnter = event != null && event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER
+            if (imeEnter || keyEnter) {
+                handleEnterPressed()
+                true
+            } else {
+                false
+            }
+        }
+        typingInput.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
+                handleEnterPressed()
+                true
+            } else {
+                false
+            }
+        }
+        frame.addView(typingInput, FrameLayout.LayoutParams(1, 1).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            leftMargin = 1
+            bottomMargin = 1
+        })
+
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16, 12, 16, 12)
+            setBackgroundColor(Color.argb(170, 245, 245, 245))
+            alpha = 0.94f
+            addView(Button(this@MirrorActivity).apply {
+                text = "Keyboard"
+                textSize = 13f
+                setOnClickListener {
+                    if (keyboardOpen) {
+                        hideSoftKeyboard()
+                        return@setOnClickListener
+                    }
+                    if (searchModeActive) {
+                        commandSender.send("KEY ESCAPE")
+                        searchModeActive = false
+                    }
+                    resetTypingBuffer()
+                    typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+                        android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+                    showSoftKeyboard()
+                }
+            })
+            addView(Button(this@MirrorActivity).apply {
+                text = "Search"
+                textSize = 13f
+                setOnClickListener {
+                    commandSender.send("SEARCH")
+                    searchModeActive = true
+                    resetTypingBuffer()
+                    typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or
+                        android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+                    showSoftKeyboard()
+                }
+            })
+            addView(Button(this@MirrorActivity).apply {
+                text = "Enter"
+                textSize = 13f
+                setOnClickListener { handleEnterPressed() }
+            })
+        }
+        frame.addView(controls, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            topMargin = 28
+            marginEnd = 20
+        })
+
         touchSender = TouchSender("127.0.0.1", INPUT_PORT)
         touchSender.start()
+        commandSender = CommandSender("127.0.0.1", INPUT_CMD_PORT)
+        commandSender.start()
 
         surfaceView.setOnTouchListener { v, event ->
             val width = v.width.toFloat().coerceAtLeast(1f)
@@ -294,7 +421,46 @@ class MirrorActivity : Activity() {
 
     override fun onDestroy() {
         touchSender.stop()
+        commandSender.stop()
         super.onDestroy()
+    }
+
+    private fun showSoftKeyboard() {
+        typingInput.requestFocus()
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(typingInput, InputMethodManager.SHOW_IMPLICIT)
+        keyboardOpen = true
+    }
+
+    private fun hideSoftKeyboard() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(typingInput.windowToken, 0)
+        typingInput.clearFocus()
+        keyboardOpen = false
+    }
+
+    private fun handleEnterPressed() {
+        commandSender.send("KEY ENTER")
+        hideSoftKeyboard()
+        resetTypingBuffer()
+        searchModeActive = false
+        typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+            android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+    }
+
+    private fun resetTypingBuffer() {
+        suppressTypingWatcher = true
+        typingInput.setText("")
+        typingInput.setSelection(typingInput.text.length)
+        previousTypedText = ""
+        suppressTypingWatcher = false
+    }
+
+    private fun longestCommonPrefix(a: String, b: String): Int {
+        val n = minOf(a.length, b.length)
+        var i = 0
+        while (i < n && a[i] == b[i]) i++
+        return i
     }
 
     private fun sendTouchPacket(type: Byte, xNorm: Float, yNorm: Float, dx: Float = 0f, dy: Float = 0f, pointerId: Int = 0) {
@@ -338,6 +504,66 @@ class MirrorActivity : Activity() {
                     ensureConnected()
                     val packet = queue.poll(1, TimeUnit.SECONDS) ?: continue
                     out?.write(packet)
+                    out?.flush()
+                } catch (_: Exception) {
+                    closeSocket()
+                    try {
+                        Thread.sleep(500)
+                    } catch (_: InterruptedException) {
+                        // Stop path.
+                    }
+                }
+            }
+            closeSocket()
+        }
+
+        private fun ensureConnected() {
+            if (socket?.isConnected == true && socket?.isClosed == false && out != null) return
+            closeSocket()
+            socket = Socket(host, port).apply { tcpNoDelay = true }
+            out = BufferedOutputStream(socket!!.getOutputStream())
+        }
+
+        private fun closeSocket() {
+            try { out?.close() } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
+            out = null
+            socket = null
+        }
+    }
+
+    private class CommandSender(private val host: String, private val port: Int) {
+        private val queue = LinkedBlockingQueue<String>()
+        @Volatile private var running = true
+        private var socket: Socket? = null
+        private var out: BufferedOutputStream? = null
+        private val worker = Thread({ runLoop() }, "DaylightCommandSender")
+
+        fun start() {
+            worker.start()
+        }
+
+        fun stop() {
+            running = false
+            worker.interrupt()
+            closeSocket()
+        }
+
+        fun send(command: String) {
+            if (running) queue.offer(command)
+        }
+
+        fun sendText(text: String) {
+            val b64 = java.util.Base64.getEncoder().encodeToString(text.toByteArray(Charsets.UTF_8))
+            send("TEXT $b64")
+        }
+
+        private fun runLoop() {
+            while (running) {
+                try {
+                    ensureConnected()
+                    val command = queue.poll(1, TimeUnit.SECONDS) ?: continue
+                    out?.write((command + "\n").toByteArray(Charsets.UTF_8))
                     out?.flush()
                 } catch (_: Exception) {
                     closeSocket()

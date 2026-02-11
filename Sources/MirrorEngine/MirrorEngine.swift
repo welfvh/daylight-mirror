@@ -61,6 +61,7 @@ public class MirrorEngine: ObservableObject {
     private var wsServer: WebSocketServer?
     private var httpServer: HTTPServer?
     private var inputServer: InputServer?
+    private var inputCommandServer: InputCommandServer?
     private var capture: ScreenCapture?
     private var displayController: DisplayController?
     private var compositorPacer: CompositorPacer?
@@ -323,6 +324,10 @@ public class MirrorEngine: ObservableObject {
             let input = try InputServer(port: INPUT_PORT, targetDisplayID: displayManager!.displayID)
             input.start()
             inputServer = input
+
+            let inputCmd = try InputCommandServer(port: INPUT_CMD_PORT)
+            inputCmd.start()
+            inputCommandServer = inputCmd
         } catch {
             status = .error("Server failed: \(error.localizedDescription)")
             displayManager = nil
@@ -364,15 +369,15 @@ public class MirrorEngine: ObservableObject {
         } catch let error as ScreenCaptureError {
             status = .error(error.localizedDescription)
             compositorPacer?.stop(); compositorPacer = nil
-            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop(); inputServer?.stop()
-            tcpServer = nil; wsServer = nil; httpServer = nil; inputServer = nil
+            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop(); inputServer?.stop(); inputCommandServer?.stop()
+            tcpServer = nil; wsServer = nil; httpServer = nil; inputServer = nil; inputCommandServer = nil
             displayManager = nil
             return
         } catch {
             status = .error("Capture failed: \(error.localizedDescription)")
             compositorPacer?.stop(); compositorPacer = nil
-            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop(); inputServer?.stop()
-            tcpServer = nil; wsServer = nil; httpServer = nil; inputServer = nil
+            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop(); inputServer?.stop(); inputCommandServer?.stop()
+            tcpServer = nil; wsServer = nil; httpServer = nil; inputServer = nil; inputCommandServer = nil
             displayManager = nil
             return
         }
@@ -401,6 +406,7 @@ public class MirrorEngine: ObservableObject {
         print("---")
         print("Native TCP:  tcp://localhost:\(TCP_PORT)")
         print("Input TCP:   tcp://localhost:\(INPUT_PORT)")
+        print("Input CMD:   tcp://localhost:\(INPUT_CMD_PORT)")
         print("WS fallback: ws://localhost:\(WS_PORT)")
         print("HTML page:   http://localhost:\(HTTP_PORT)")
         print("Virtual display \(displayManager!.displayID): \(w)x\(h)")
@@ -443,9 +449,11 @@ public class MirrorEngine: ObservableObject {
 
             let streamTunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
             let inputTunnelOK = ADBBridge.setupReverseTunnel(port: INPUT_PORT)
-            if streamTunnelOK && inputTunnelOK {
+            let inputCmdTunnelOK = ADBBridge.setupReverseTunnel(port: INPUT_CMD_PORT)
+            if streamTunnelOK && inputTunnelOK && inputCmdTunnelOK {
                 NSLog("[ADB] Reverse tunnel tcp:%d established", TCP_PORT)
                 NSLog("[ADB] Reverse tunnel tcp:%d established", INPUT_PORT)
+                NSLog("[ADB] Reverse tunnel tcp:%d established", INPUT_CMD_PORT)
                 ADBBridge.launchApp(forceRestart: true)
                 adbConnected = true
                 apkInstallStatus = ""
@@ -491,10 +499,12 @@ public class MirrorEngine: ObservableObject {
             wsServer?.stop()
             httpServer?.stop()
             inputServer?.stop()
+            inputCommandServer?.stop()
             tcpServer = nil
             wsServer = nil
             httpServer = nil
             inputServer = nil
+            inputCommandServer = nil
 
             // Virtual display disappears on dealloc, mirroring reverts
             displayManager = nil
@@ -502,6 +512,7 @@ public class MirrorEngine: ObservableObject {
             if adbConnected && self.deviceDetected {
                 ADBBridge.removeReverseTunnel(port: TCP_PORT)
                 ADBBridge.removeReverseTunnel(port: INPUT_PORT)
+                ADBBridge.removeReverseTunnel(port: INPUT_CMD_PORT)
             }
 
             // Restore font smoothing when mirror stops
@@ -534,7 +545,8 @@ public class MirrorEngine: ObservableObject {
         Task.detached {
             let streamTunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
             let inputTunnelOK = ADBBridge.setupReverseTunnel(port: INPUT_PORT)
-            if streamTunnelOK && inputTunnelOK {
+            let inputCmdTunnelOK = ADBBridge.setupReverseTunnel(port: INPUT_CMD_PORT)
+            if streamTunnelOK && inputTunnelOK && inputCmdTunnelOK {
                 NSLog("[ADB] Reverse tunnel re-established")
                 ADBBridge.launchApp()
                 await MainActor.run { self.adbConnected = true }

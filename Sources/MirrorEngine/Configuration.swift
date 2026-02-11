@@ -7,6 +7,7 @@ import Foundation
 
 let TCP_PORT: UInt16 = 8888
 let INPUT_PORT: UInt16 = 8892
+let INPUT_CMD_PORT: UInt16 = 8893
 let WS_PORT: UInt16 = 8890
 let HTTP_PORT: UInt16 = 8891
 let TARGET_FPS: Int = 30
