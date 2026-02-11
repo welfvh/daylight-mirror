@@ -102,7 +102,6 @@ struct DaylightMirrorApp: App {
 enum SetupStep: Int, CaseIterable {
     case welcome
     case permissions
-    case connect
     case ready
 }
 
@@ -113,8 +112,6 @@ struct SetupView: View {
     @State private var step: SetupStep = .welcome
     @State private var hasScreenRecording = MirrorEngine.hasScreenRecordingPermission()
     @State private var hasAccessibility = MirrorEngine.hasAccessibilityPermission()
-    @State private var hasADB = MirrorEngine.hasADB()
-    @State private var hasDevice = false
     @State private var pollTimer: Timer?
 
     var body: some View {
@@ -137,8 +134,6 @@ struct SetupView: View {
                     welcomeStep
                 case .permissions:
                     permissionsStep
-                case .connect:
-                    connectStep
                 case .ready:
                     readyStep
                 }
@@ -253,7 +248,7 @@ struct SetupView: View {
                 Button("Back") { withAnimation { step = .welcome } }
                     .buttonStyle(.bordered)
                 Spacer()
-                Button(action: { withAnimation { step = .connect } }) {
+                Button(action: { withAnimation { step = .ready } }) {
                     Text("Continue")
                         .frame(width: 120)
                 }
@@ -304,126 +299,7 @@ struct SetupView: View {
         }
     }
 
-    // MARK: Step 3 — Connect
-
-    var connectStep: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
-            Text("Connect Your Daylight")
-                .font(.title2.weight(.medium))
-
-            VStack(alignment: .leading, spacing: 16) {
-                if !hasADB {
-                    setupRow(1, icon: "terminal",
-                             title: "Install ADB",
-                             detail: "Run in Terminal:",
-                             code: "brew install android-platform-tools",
-                             done: false)
-                } else {
-                    setupRow(1, icon: "terminal",
-                             title: "ADB installed",
-                             detail: nil, code: nil, done: true)
-                }
-
-                setupRow(2, icon: "gear",
-                         title: "Enable USB Debugging on DC-1",
-                         detail: "Settings > About tablet > tap Build number 7 times\nSettings > Developer options > enable USB debugging",
-                         code: nil, done: false)
-
-                setupRow(3, icon: "cable.connector",
-                         title: "Connect USB-C cable",
-                         detail: "Plug your Mac into the Daylight and tap Allow on the prompt",
-                         code: nil, done: false)
-
-                HStack(spacing: 10) {
-                    if hasDevice {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("Daylight DC-1 connected")
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(.green)
-                    } else {
-                        ProgressView().controlSize(.small)
-                        Text("Waiting for device...")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.top, 4)
-            }
-            .padding(.horizontal, 40)
-
-            Spacer()
-
-            if hasDevice {
-                Button(action: {
-                    Task { await engine.start() }
-                    withAnimation { step = .ready }
-                }) {
-                    Text("Mirror Now")
-                        .font(.title3.weight(.medium))
-                        .frame(width: 200)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            }
-
-            HStack {
-                Button("Back") { withAnimation { step = .permissions } }
-                    .buttonStyle(.bordered)
-                Spacer()
-                if !hasDevice {
-                    Button(action: { withAnimation { step = .ready } }) {
-                        Text("Skip for Now")
-                            .frame(width: 140)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            .padding(.horizontal, 40)
-            .padding(.bottom, 32)
-        }
-        .onAppear { startDevicePolling() }
-    }
-
-    func setupRow(_ number: Int, icon: String, title: String,
-                  detail: String?, code: String?, done: Bool) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: done ? "checkmark.circle.fill" : icon)
-                .font(.body)
-                .foregroundStyle(done ? .green : .secondary)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(done ? .secondary : .primary)
-                if let detail = detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let code = code {
-                    Text(code)
-                        .font(.system(size: 11, design: .monospaced))
-                        .padding(6)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(.black.opacity(0.05)))
-                        .textSelection(.enabled)
-                }
-            }
-        }
-    }
-
-    func startDevicePolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            hasADB = MirrorEngine.hasADB()
-            hasDevice = MirrorEngine.hasDevice()
-        }
-    }
-
-    // MARK: Step 4 — Ready
+    // MARK: Step 3 — Ready
 
     var readyStep: some View {
         VStack(spacing: 24) {
@@ -437,10 +313,10 @@ struct SetupView: View {
                 .font(.title2.weight(.medium))
 
             VStack(alignment: .leading, spacing: 12) {
-                howItWorksRow("1", "Click Start Mirror in the menu bar (or press Ctrl+F8)")
-                howItWorksRow("2", "Your Mac creates a virtual 4:3 display and starts streaming")
-                howItWorksRow("3", "The Daylight app launches automatically via USB")
-                howItWorksRow("4", "Your Mac screen dims — the Daylight lights up")
+                howItWorksRow("1", "Connect your Daylight DC-1 via USB-C")
+                howItWorksRow("2", "Click Start Mirror in the menu bar (or press Ctrl+F8)")
+                howItWorksRow("3", "Your Mac creates a virtual 4:3 display and starts streaming")
+                howItWorksRow("4", "The Daylight app launches automatically — your Mac dims")
             }
             .padding(.horizontal, 50)
 
@@ -452,6 +328,10 @@ struct SetupView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+
+                Text("Auto-reconnect detects your Daylight when plugged in")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
 
                 HStack(spacing: 6) {
                     Text("Ctrl")
