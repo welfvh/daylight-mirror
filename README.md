@@ -150,6 +150,10 @@ The blog series tells the full story:
 - [Part 2: Killing the GPU](blog/part-2-killing-the-gpu.md) — zero-GPU pipeline, native Android renderer with ARM SIMD
 - [Part 3: One Click](blog/part-3-one-click.md) — virtual display, display controls, menu bar app
 
+## Get a Daylight DC-1
+
+Don't have one yet? Use code **WELF** at checkout to save $50 on your [Daylight DC-1](https://daylightcomputer.com/dc1).
+
 ## Support
 
 If you find this useful, you can [buy me a coffee on Gumroad](https://welfie.gumroad.com/l/daylight-mirror).

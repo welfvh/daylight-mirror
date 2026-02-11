@@ -250,7 +250,7 @@ The software works. The display pipeline is essentially solved — sub-10ms late
 
 ---
 
-*The code is at [github.com/welfvh/daylight-mirror](https://github.com/welfvh/daylight-mirror). The Daylight DC-1 is made by [Daylight Computer](https://daylightcomputer.com).*
+*The code is at [github.com/welfvh/daylight-mirror](https://github.com/welfvh/daylight-mirror). The Daylight DC-1 is made by [Daylight Computer](https://daylightcomputer.com). Use code **WELF** at checkout to save $50 on yours.*
 
 ---
 
