@@ -6,15 +6,11 @@
 import Foundation
 
 struct ADBBridge {
-    /// Resolved path to the adb binary. Checks bundled copy first, then PATH.
+    /// Resolved path to the adb binary. Prefers system adb (user-managed, up-to-date),
+    /// falls back to bundled copy (for users without Homebrew/Android SDK).
     private static let resolvedADBPath: String? = {
-        // 1. Bundled adb inside the .app bundle (Resources/adb)
-        if let bundled = Bundle.main.resourcePath.map({ $0 + "/adb" }),
-           FileManager.default.isExecutableFile(atPath: bundled) {
-            print("[ADB] Using bundled adb: \(bundled)")
-            return bundled
-        }
-        // 2. Fallback: find adb on PATH (e.g. Homebrew install)
+        // 1. System adb on PATH (e.g. Homebrew install) — preferred because the user
+        //    keeps it updated and it won't conflict with their other Android tooling.
         let pipe = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -30,7 +26,15 @@ struct ADBBridge {
             print("[ADB] Using system adb: \(path)")
             return path
         }
-        print("[ADB] No adb binary found (checked bundle + PATH)")
+        // 2. Fallback: bundled adb inside the .app bundle (Resources/adb).
+        //    Only used when no system adb exists. May be stale — `make fetch-adb`
+        //    downloads latest at build time but won't auto-update.
+        if let bundled = Bundle.main.resourcePath.map({ $0 + "/adb" }),
+           FileManager.default.isExecutableFile(atPath: bundled) {
+            print("[ADB] Using bundled adb (no system adb found): \(bundled)")
+            return bundled
+        }
+        print("[ADB] No adb binary found (checked PATH + bundle)")
         return nil
     }()
 
