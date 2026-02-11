@@ -133,10 +133,11 @@ class TCPServer {
             }
 
             let base = ackParseBuffer.startIndex
-            let seq = UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 2)])
-                    | UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 3)]) << 8
-                    | UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 4)]) << 16
-                    | UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 5)]) << 24
+            let b0 = UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 2)])
+            let b1 = UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 3)]) << 8
+            let b2 = UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 4)]) << 16
+            let b3 = UInt32(ackParseBuffer[ackParseBuffer.index(base, offsetBy: 5)]) << 24
+            let seq = b0 | b1 | b2 | b3
             ackParseBuffer.removeFirst(6)
 
             let now = CACurrentMediaTime()
