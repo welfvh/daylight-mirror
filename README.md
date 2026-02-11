@@ -10,9 +10,9 @@ Your Mac renders natively at the Daylight's 4:3 resolution. What you see on the 
 
 ## Download
 
-### [Get Daylight Mirror](https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06)
+### [Get Daylight Mirror on Gumroad](https://welfie.gumroad.com/l/daylight-mirror)
 
-The `.dmg` includes both the Mac menu bar app and the Android APK for your Daylight. Pay what you want (from $5).
+The `.dmg` includes both the Mac menu bar app and the Android APK for your Daylight. Pay what you want (starting at $1).
 
 After downloading, drag "Daylight Mirror" to Applications, then install the included APK on your Daylight:
 
@@ -156,7 +156,7 @@ Don't have one yet? Use code **WELF** at checkout to save $50 on your [Daylight 
 
 ## Support
 
-If you find this useful, you can [support the project](https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06).
+If you find this useful, you can [buy me a coffee on Gumroad](https://welfie.gumroad.com/l/daylight-mirror).
 
 ## License
 
