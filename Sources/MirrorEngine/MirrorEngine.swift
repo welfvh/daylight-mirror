@@ -27,6 +27,19 @@ public class MirrorEngine: ObservableObject {
     @Published public var warmth: Int = 128
     @Published public var backlightOn: Bool = true
     @Published public var adbConnected: Bool = false
+    @Published public var wirelessConnecting: Bool = false
+    @Published public var wirelessStatus: String = ""
+    @Published public var adbNetworkEndpoint: String = "" {
+        didSet {
+            let trimmed = adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = trimmed.lowercased() == "off" ? "" : trimmed
+            if adbNetworkEndpoint != normalized {
+                adbNetworkEndpoint = normalized
+                return
+            }
+            UserDefaults.standard.set(normalized, forKey: "adbNetworkEndpoint")
+        }
+    }
     @Published public var apkInstallStatus: String = ""  // Empty = idle, "Installing..." = in progress, "Installed" = done, or error
     @Published public var clientCount: Int = 0
     @Published public var totalFrames: Int = 0
@@ -83,6 +96,7 @@ public class MirrorEngine: ObservableObject {
         if UserDefaults.standard.object(forKey: "autoMirrorEnabled") != nil {
             self.autoMirrorEnabled = UserDefaults.standard.bool(forKey: "autoMirrorEnabled")
         }
+        self.adbNetworkEndpoint = UserDefaults.standard.string(forKey: "adbNetworkEndpoint") ?? ""
         NSLog("[MirrorEngine] init, resolution: %@, sharpen: %.1f, contrast: %.1f",
               resolution.rawValue, sharpenAmount, contrastAmount)
 
@@ -230,6 +244,10 @@ public class MirrorEngine: ObservableObject {
     /// Check if a Daylight device is connected via USB.
     public static func hasDevice() -> Bool {
         return ADBBridge.connectedDevice() != nil
+    }
+
+    public var wirelessModeEnabled: Bool {
+        !adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Whether the onboarding setup has been completed.
@@ -417,9 +435,18 @@ public class MirrorEngine: ObservableObject {
     @MainActor
     private func establishADBConnection() async {
         let maxAttempts = 3
+        let preferredEndpoint = adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let useWireless = !preferredEndpoint.isEmpty
+        var apkSyncedThisSession = false
 
         for attempt in 1...maxAttempts {
-            guard let device = ADBBridge.connectedDevice() else {
+            ADBBridge.setSelectedDeviceSerial(nil)
+            if useWireless {
+                _ = ADBBridge.connectWireless(endpoint: preferredEndpoint)
+            }
+
+            guard let device = ADBBridge.connectedDevice(preferredSerial: useWireless ? preferredEndpoint : nil)
+                ?? ADBBridge.connectedDevice() else {
                 if attempt < maxAttempts {
                     NSLog("[ADB] No device found (attempt %d/%d), retrying...", attempt, maxAttempts)
                     apkInstallStatus = "Looking for device... (\(attempt)/\(maxAttempts))"
@@ -433,17 +460,19 @@ public class MirrorEngine: ObservableObject {
             }
 
             NSLog("[ADB] Device found: %@ (attempt %d)", device, attempt)
+            ADBBridge.setSelectedDeviceSerial(device)
 
-            // Auto-install bundled APK if the companion app isn't on the device yet
-            if !ADBBridge.isAppInstalled() {
-                apkInstallStatus = "Installing companion app..."
-                NSLog("[ADB] Companion app not found, installing bundled APK...")
+            // Always sync the bundled APK once per mirror session so Android side
+            // is guaranteed to match the desktop build.
+            if !apkSyncedThisSession {
+                apkInstallStatus = "Syncing companion app..."
                 if let error = ADBBridge.installBundledAPK() {
-                    apkInstallStatus = "APK install failed: \(error)"
-                    NSLog("[ADB] APK install error: %@", error)
+                    apkInstallStatus = "APK sync failed: \(error)"
+                    NSLog("[ADB] APK sync error: %@", error)
                 } else {
-                    apkInstallStatus = "Installed"
-                    NSLog("[ADB] Companion app installed")
+                    apkInstallStatus = "Companion synced"
+                    apkSyncedThisSession = true
+                    NSLog("[ADB] Companion app synced")
                 }
             }
 
@@ -470,6 +499,91 @@ public class MirrorEngine: ObservableObject {
         NSLog("[ADB] WARNING: Reverse tunnel failed after %d attempts", maxAttempts)
         apkInstallStatus = "Tunnel failed — tap Reconnect to retry"
         adbConnected = false
+    }
+
+    public func setWirelessEndpoint(_ endpoint: String?) -> String {
+        let trimmed = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        adbNetworkEndpoint = trimmed.lowercased() == "off" ? "" : trimmed
+        if adbNetworkEndpoint.isEmpty {
+            wirelessStatus = "Wireless disabled"
+            return "off"
+        }
+        wirelessStatus = "Wireless endpoint: \(adbNetworkEndpoint)"
+        return adbNetworkEndpoint
+    }
+
+    public func setWirelessMode(_ enabled: Bool) {
+        if !enabled {
+            let previousEndpoint = adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            _ = setWirelessEndpoint(nil)
+            if !previousEndpoint.isEmpty {
+                _ = ADBBridge.disconnectWireless(endpoint: previousEndpoint)
+            }
+            let serials = ADBBridge.connectedDeviceSerials()
+            if let usbSerial = serials.first(where: { !ADBBridge.isWirelessSerial($0) }) {
+                ADBBridge.setSelectedDeviceSerial(usbSerial)
+                wirelessStatus = "Wireless disabled (USB active)"
+            } else {
+                ADBBridge.setSelectedDeviceSerial(nil)
+                wirelessStatus = "Wireless disabled"
+            }
+            if status == .running { reconnect() }
+            return
+        }
+        if wirelessConnecting { return }
+        wirelessConnecting = true
+        wirelessStatus = "Detecting wireless endpoint..."
+
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            ADBBridge.ensureServerRunning()
+
+            // 1) Reuse configured endpoint if present.
+            let existing = await MainActor.run {
+                self.adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if !existing.isEmpty {
+                if ADBBridge.connectWireless(endpoint: existing) {
+                    await MainActor.run {
+                        _ = self.setWirelessEndpoint(existing)
+                        self.wirelessConnecting = false
+                        if self.status == .running { self.reconnect() }
+                    }
+                    return
+                }
+            }
+
+            // 2) If a wireless device is already connected to adb, use it.
+            let serials = ADBBridge.connectedDeviceSerials()
+            if let wifiSerial = serials.first(where: { ADBBridge.isWirelessSerial($0) }) {
+                await MainActor.run {
+                    _ = self.setWirelessEndpoint(wifiSerial)
+                    self.wirelessConnecting = false
+                    if self.status == .running { self.reconnect() }
+                }
+                return
+            }
+
+            // 3) Bootstrap wireless from USB: adb tcpip 5555 + discover wlan IP + adb connect.
+            if let usbSerial = serials.first(where: { !ADBBridge.isWirelessSerial($0) }),
+               ADBBridge.enableTCPIP(serial: usbSerial),
+               let ip = ADBBridge.discoverWLANIPAddress(serial: usbSerial) {
+                let endpoint = "\(ip):5555"
+                if ADBBridge.connectWireless(endpoint: endpoint) {
+                    await MainActor.run {
+                        _ = self.setWirelessEndpoint(endpoint)
+                        self.wirelessConnecting = false
+                        if self.status == .running { self.reconnect() }
+                    }
+                    return
+                }
+            }
+
+            await MainActor.run {
+                self.wirelessStatus = "Wireless setup failed. Keep USB connected once and retry."
+                self.wirelessConnecting = false
+            }
+        }
     }
 
     public func stop() {
@@ -543,6 +657,20 @@ public class MirrorEngine: ObservableObject {
         }
         print("[MirrorEngine] Reconnecting ADB...")
         Task.detached {
+            let endpoint = self.adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !endpoint.isEmpty {
+                _ = ADBBridge.connectWireless(endpoint: endpoint)
+                if let preferred = ADBBridge.connectedDevice(preferredSerial: endpoint) {
+                    ADBBridge.setSelectedDeviceSerial(preferred)
+                }
+            } else {
+                let serials = ADBBridge.connectedDeviceSerials()
+                if let usbSerial = serials.first(where: { !ADBBridge.isWirelessSerial($0) }) {
+                    ADBBridge.setSelectedDeviceSerial(usbSerial)
+                } else {
+                    ADBBridge.setSelectedDeviceSerial(nil)
+                }
+            }
             let streamTunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
             let inputTunnelOK = ADBBridge.setupReverseTunnel(port: INPUT_PORT)
             let inputCmdTunnelOK = ADBBridge.setupReverseTunnel(port: INPUT_CMD_PORT)

@@ -5,6 +5,7 @@
 //   daylight-mirror stop               — Stop the running mirror instance
 //   daylight-mirror status             — Print current state (machine-readable key=value pairs)
 //   daylight-mirror reconnect          — Re-establish ADB tunnel and relaunch Android app
+//   daylight-mirror wireless [on|off|ip:port] — Configure wireless ADB endpoint
 //   daylight-mirror brightness [0-255] — Get or set Daylight brightness
 //   daylight-mirror warmth [0-255]     — Get or set Daylight warmth (amber rate)
 //   daylight-mirror backlight [on|off|toggle] — Get or toggle backlight
@@ -366,6 +367,17 @@ func commandReconnect() {
     exit(0)
 }
 
+/// `daylight-mirror wireless [on|off|ip:port]` — configure wireless ADB endpoint.
+/// When running, this also triggers a reconnect immediately.
+func commandWireless() {
+    let arg = args.count > 2 ? args[2] : nil
+    if let arg = arg {
+        runControlCommand("WIRELESS \(arg)")
+    } else {
+        runControlCommand("WIRELESS")
+    }
+}
+
 /// `daylight-mirror brightness [value]` — get or set Daylight brightness (0-255).
 func commandBrightness() {
     let arg = args.count > 2 ? args[2] : nil
@@ -538,6 +550,7 @@ func printUsage() {
     print("  stop                     Stop the running mirror instance")
     print("  status                   Print current state (machine-readable key=value pairs)")
     print("  reconnect                Re-establish ADB reverse tunnel and relaunch Android app")
+    print("  wireless [on|off|ip:port] Configure wireless ADB endpoint (on = auto-detect)")
     print("  brightness [0-255]       Get or set Daylight brightness")
     print("  warmth [0-255]           Get or set Daylight warmth (amber rate)")
     print("  backlight [on|off|toggle] Get or toggle backlight")
@@ -568,6 +581,8 @@ case "status":
     commandStatus()
 case "reconnect":
     commandReconnect()
+case "wireless":
+    commandWireless()
 case "brightness":
     commandBrightness()
 case "warmth":
