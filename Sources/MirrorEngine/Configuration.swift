@@ -6,6 +6,7 @@
 import Foundation
 
 let TCP_PORT: UInt16 = 8888
+let INPUT_PORT: UInt16 = 8892
 let WS_PORT: UInt16 = 8890
 let HTTP_PORT: UInt16 = 8891
 let TARGET_FPS: Int = 30
@@ -68,15 +69,23 @@ public enum DisplayResolution: String, CaseIterable, Identifiable {
 let MAGIC_FRAME: [UInt8] = [0xDA, 0x7E]
 let MAGIC_CMD: [UInt8] = [0xDA, 0x7F]
 let MAGIC_ACK: [UInt8] = [0xDA, 0x7A]  // ACK from Android → Mac for RTT measurement
+let MAGIC_INPUT: [UInt8] = [0xDA, 0x70] // Input packet Android -> Mac
 let FLAG_KEYFRAME: UInt8 = 0x01
 let CMD_BRIGHTNESS: UInt8 = 0x01
 let CMD_WARMTH: UInt8 = 0x02
 let CMD_BACKLIGHT_TOGGLE: UInt8 = 0x03
 let CMD_RESOLUTION: UInt8 = 0x04
 
+let INPUT_TOUCH_DOWN: UInt8 = 0x01
+let INPUT_TOUCH_MOVE: UInt8 = 0x02
+let INPUT_TOUCH_UP: UInt8 = 0x03
+let INPUT_SCROLL: UInt8 = 0x04
+
 // Frame header: [DA 7E] [flags:1] [seq:4 LE] [len:4 LE] [payload] = 11 bytes
 // ACK packet:   [DA 7A] [seq:4 LE] = 6 bytes (sent by Android after rendering)
 let FRAME_HEADER_SIZE = 11
+// Input packet: [DA 70] [type:1] [x:4 f32 LE] [y:4 f32 LE] [dx:4 f32 LE] [dy:4 f32 LE] [pointer:4 u32 LE]
+let INPUT_PACKET_SIZE = 23
 
 let BRIGHTNESS_STEP: Int = 15
 let WARMTH_STEP: Int = 20
