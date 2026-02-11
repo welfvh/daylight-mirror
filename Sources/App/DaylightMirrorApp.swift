@@ -570,7 +570,9 @@ struct MirrorMenuView: View {
                 .frame(width: 6, height: 6)
             Text(engine.clientCount > 0
                  ? "Daylight connected"
-                 : "Waiting for client...")
+                 : engine.apkInstallStatus.isEmpty
+                    ? "Waiting for client..."
+                    : engine.apkInstallStatus)
                 .font(.caption)
             Spacer()
             if engine.adbConnected {

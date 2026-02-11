@@ -91,37 +91,51 @@ public class MirrorEngine: ObservableObject {
         }
 
         // USB device monitoring — auto-detect DC-1 connect/disconnect
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            let monitor = USBDeviceMonitor()
-            monitor.onDeviceConnected = { [weak self] in
+        // Ensure adb server is running before polling, otherwise `adb devices` returns nothing.
+        DispatchQueue.global(qos: .utility).async {
+            if ADBBridge.isAvailable() { ADBBridge.ensureServerRunning() }
+            DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.deviceDetected = true
-                if self.autoMirrorEnabled && self.status == .idle {
-                    NSLog("[USB] Device connected — auto-starting mirror")
-                    Task { @MainActor in await self.start() }
-                } else if self.autoMirrorEnabled && self.status == .waitingForDevice {
-                    NSLog("[USB] Device connected — starting mirror")
-                    self.status = .idle  // Reset from waiting state
-                    Task { @MainActor in await self.start() }
-                } else if self.status == .running {
-                    NSLog("[USB] Device reconnected — re-establishing tunnel")
-                    self.reconnect()
+                let monitor = USBDeviceMonitor()
+                monitor.onDeviceConnected = { [weak self] in
+                    guard let self = self else { return }
+                    self.deviceDetected = true
+                    if self.autoMirrorEnabled && self.status == .idle {
+                        NSLog("[USB] Device connected — auto-starting mirror")
+                        Task { @MainActor in await self.start() }
+                    } else if self.autoMirrorEnabled && self.status == .waitingForDevice {
+                        NSLog("[USB] Device connected — starting mirror")
+                        self.status = .idle
+                        Task { @MainActor in await self.start() }
+                    } else if self.autoMirrorEnabled && self.status == .stopping {
+                        NSLog("[USB] Device connected while stopping — will restart after teardown")
+                        Task { @MainActor in
+                            while self.status == .stopping {
+                                try? await Task.sleep(for: .milliseconds(200))
+                            }
+                            if self.status == .idle {
+                                NSLog("[USB] Teardown complete — restarting mirror")
+                                await self.start()
+                            }
+                        }
+                    } else if self.status == .running {
+                        NSLog("[USB] Device reconnected — re-establishing tunnel")
+                        self.reconnect()
+                    }
                 }
-            }
-            monitor.onDeviceDisconnected = { [weak self] in
-                guard let self = self else { return }
-                self.deviceDetected = false
-                if self.autoMirrorEnabled && self.status == .running {
-                    NSLog("[USB] Device disconnected — stopping mirror")
-                    self.stop()
-                    self.status = .waitingForDevice
+                monitor.onDeviceDisconnected = { [weak self] in
+                    guard let self = self else { return }
+                    self.deviceDetected = false
+                    if self.autoMirrorEnabled && self.status == .running {
+                        NSLog("[USB] Device disconnected — stopping mirror")
+                        self.stop()
+                        self.status = .waitingForDevice
+                    }
                 }
+                monitor.start()
+                self.usbMonitor = monitor
+                self.deviceDetected = monitor.isDeviceConnected
             }
-            monitor.start()
-            self.usbMonitor = monitor
-            // Set initial device state
-            self.deviceDetected = monitor.isDeviceConnected
         }
 
         // Check for updates in the background
@@ -242,15 +256,7 @@ public class MirrorEngine: ObservableObject {
 
         status = .starting
 
-        // 1. Check for ADB device (but don't set up tunnel yet — server must be listening first)
-        let hasADBDevice = ADBBridge.isAvailable() && ADBBridge.connectedDevice() != nil
-        if hasADBDevice {
-            print("ADB device: \(ADBBridge.connectedDevice()!)")
-        } else {
-            print("No ADB device (mirror will wait for TCP connection)")
-        }
-
-        // 2. Virtual display at selected resolution
+        // 1. Virtual display at selected resolution
         let w = resolution.width
         let h = resolution.height
         displayManager = VirtualDisplayManager(width: w, height: h, hiDPI: resolution.isHiDPI)
@@ -309,32 +315,12 @@ public class MirrorEngine: ObservableObject {
         }
 
         // 4b. ADB tunnel + auto-install APK + launch (AFTER server is listening)
-        if hasADBDevice {
-            // Auto-install bundled APK if the companion app isn't on the device yet
-            if !ADBBridge.isAppInstalled() {
-                apkInstallStatus = "Installing companion app..."
-                print("[ADB] Companion app not found, installing bundled APK...")
-                if let error = ADBBridge.installBundledAPK() {
-                    apkInstallStatus = "APK install failed: \(error)"
-                    print("[ADB] APK install error: \(error)")
-                } else {
-                    apkInstallStatus = "Installed"
-                    print("[ADB] Companion app installed")
-                }
-            }
-
-            let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
-            if tunnelOK {
-                print("[ADB] Reverse tunnel tcp:\(TCP_PORT) established")
-                ADBBridge.launchApp()
-                adbConnected = true
-                apkInstallStatus = ""  // Clear status on success
-            } else {
-                print("[ADB] WARNING: Reverse tunnel failed — DC-1 cannot reach Mac on port \(TCP_PORT)")
-                adbConnected = false
-            }
+        if ADBBridge.isAvailable() {
+            ADBBridge.ensureServerRunning()
+            await establishADBConnection()
         } else {
             adbConnected = false
+            NSLog("[ADB] No adb binary — skipping device setup")
         }
 
         // 5. Capture
@@ -403,6 +389,62 @@ public class MirrorEngine: ObservableObject {
         print("Virtual display \(displayManager!.displayID): \(w)x\(h)")
     }
 
+    /// Retry ADB device detection, tunnel setup, APK install, and app launch.
+    /// Retries up to 3 times with 1-second delays to handle adb server startup lag.
+    @MainActor
+    private func establishADBConnection() async {
+        let maxAttempts = 3
+
+        for attempt in 1...maxAttempts {
+            guard let device = ADBBridge.connectedDevice() else {
+                if attempt < maxAttempts {
+                    NSLog("[ADB] No device found (attempt %d/%d), retrying...", attempt, maxAttempts)
+                    apkInstallStatus = "Looking for device... (\(attempt)/\(maxAttempts))"
+                    try? await Task.sleep(for: .seconds(1))
+                    continue
+                }
+                NSLog("[ADB] No device found after %d attempts", maxAttempts)
+                apkInstallStatus = "No device found — connect via USB and tap Reconnect"
+                adbConnected = false
+                return
+            }
+
+            NSLog("[ADB] Device found: %@ (attempt %d)", device, attempt)
+
+            // Auto-install bundled APK if the companion app isn't on the device yet
+            if !ADBBridge.isAppInstalled() {
+                apkInstallStatus = "Installing companion app..."
+                NSLog("[ADB] Companion app not found, installing bundled APK...")
+                if let error = ADBBridge.installBundledAPK() {
+                    apkInstallStatus = "APK install failed: \(error)"
+                    NSLog("[ADB] APK install error: %@", error)
+                } else {
+                    apkInstallStatus = "Installed"
+                    NSLog("[ADB] Companion app installed")
+                }
+            }
+
+            let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
+            if tunnelOK {
+                NSLog("[ADB] Reverse tunnel tcp:%d established", TCP_PORT)
+                ADBBridge.launchApp(forceRestart: true)
+                adbConnected = true
+                apkInstallStatus = ""
+                return
+            }
+
+            if attempt < maxAttempts {
+                NSLog("[ADB] Tunnel failed (attempt %d/%d), retrying...", attempt, maxAttempts)
+                apkInstallStatus = "Tunnel failed, retrying... (\(attempt)/\(maxAttempts))"
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        NSLog("[ADB] WARNING: Reverse tunnel failed after %d attempts", maxAttempts)
+        apkInstallStatus = "Tunnel failed — tap Reconnect to retry"
+        adbConnected = false
+    }
+
     public func stop() {
         guard status == .running || status == .waitingForDevice else { return }
         if status == .waitingForDevice { status = .idle; return }
@@ -436,7 +478,7 @@ public class MirrorEngine: ObservableObject {
             // Virtual display disappears on dealloc, mirroring reverts
             displayManager = nil
 
-            if adbConnected {
+            if adbConnected && self.deviceDetected {
                 ADBBridge.removeReverseTunnel(port: TCP_PORT)
             }
 
@@ -462,16 +504,19 @@ public class MirrorEngine: ObservableObject {
     /// without tearing down the virtual display, capture, or servers.
     public func reconnect() {
         guard status == .running else { return }
+        guard clientCount == 0 || !adbConnected else {
+            print("[MirrorEngine] Reconnect skipped — client already connected")
+            return
+        }
         print("[MirrorEngine] Reconnecting ADB...")
         Task.detached {
             let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
             if tunnelOK {
-                print("[ADB] Reverse tunnel re-established")
+                NSLog("[ADB] Reverse tunnel re-established")
                 ADBBridge.launchApp()
                 await MainActor.run { self.adbConnected = true }
-                print("[MirrorEngine] Reconnect done — tunnel + app relaunched")
             } else {
-                print("[ADB] WARNING: Reverse tunnel failed on reconnect")
+                NSLog("[ADB] WARNING: Reverse tunnel failed on reconnect")
                 await MainActor.run { self.adbConnected = false }
             }
         }
