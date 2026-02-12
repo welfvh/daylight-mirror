@@ -53,7 +53,7 @@ struct ADBBridge {
             NSLog("[ADB] Using bundled adb (no system adb found): %@", bundled)
             return bundled
         }
-        print("[ADB] No adb binary found (checked PATH, known locations, and bundle)")
+        NSLog("[ADB] No adb binary found (checked PATH, known locations, and bundle)")
         return nil
     }()
 
