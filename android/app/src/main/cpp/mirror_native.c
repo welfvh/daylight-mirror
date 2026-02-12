@@ -729,7 +729,6 @@ static void *decode_thread(void *arg) {
 
         g_sock = sock;
         LOGI("Connected to server %s:%d", g_host, g_port);
-        notify_connection_state(1);
 
         int frame_count = 0;
         int stat_frames = 0;
@@ -858,6 +857,12 @@ static void *decode_thread(void *arg) {
 
             send_ack(sock, seq);
             publish_frame(g_current_frame, seq);
+
+            // Notify connected only after first frame is rendered
+            // (TCP connect alone doesn't mean the server is streaming)
+            if (frame_count == 0) {
+                notify_connection_state(1);
+            }
 
             recv_sum += ms_diff(t0, t1);
             decomp_sum += ms_diff(t1, t2);
