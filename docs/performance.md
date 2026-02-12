@@ -23,8 +23,8 @@ Every frame follows this pipeline:
 4. **Transmit** — TCP over USB sends `[DA 7E][flags][seq][len][payload]`
 5. **Decompress** — Android LZ4-decompresses into a buffer
 6. **Delta apply** — NEON XOR reconstructs the current frame (skip for keyframes)
-7. **Blit** — NEON expands grey→RGBX (4 bytes/pixel) into ANativeWindow buffer
-8. **Display** — `ANativeWindow_unlockAndPost` presents to screen
+7. **Blit** — GL shader expands grey→RGB via `GL_LUMINANCE` texture upload + fragment shader, presented via `eglSwapBuffers`
+8. **Display** — SurfaceFlinger composites the GL surface to screen
 
 Android sends an ACK `[DA 7A][seq]` back to Mac after step 5 (after decode, before blit). The Mac uses this to measure RTT and track inflight frames for backpressure.
 
@@ -42,21 +42,21 @@ daylight-mirror latency --watch
 
 Output:
 ```
-FPS:              28.5
+FPS:              57.3
 Clients:          1
-Total frames:     837
-Skipped frames:   12
+Total frames:     34569
+Skipped frames:   0
 
 Mac processing:
-  Greyscale:      0.4 ms
-  LZ4 compress:   1.5 ms
-  Jitter:         1.7 ms
+  Greyscale:      1.2 ms
+  LZ4 compress:   1.6 ms
+  Jitter:         0.3 ms
 
 Round-trip (Mac → Daylight → Mac):
-  Average:        23.5 ms
-  P95:            44.3 ms
+  Average:        10.5 ms
+  P95:            23.0 ms
 
-Est. one-way:     ~11.8 ms
+Est. one-way:     ~5.3 ms
 ```
 
 ### Android-side
@@ -67,7 +67,7 @@ adb logcat -s DaylightMirror
 
 Output:
 ```
-FPS: 28.5 | recv: 20.0ms | lz4: 3.0ms | delta: 4.6ms | neon: 5.6ms | vsync: 0.7ms | 294KB delta | drops: 1 | total: 827
+FPS: 57.3 | recv: 4.2ms | lz4: 3.1ms | delta: 3.6ms | blit: 3.3ms | vsync: 1.9ms | 7KB delta | drops: 0 | total: 34569
 ```
 
 ### What each metric means
@@ -83,8 +83,8 @@ FPS: 28.5 | recv: 20.0ms | lz4: 3.0ms | delta: 4.6ms | neon: 5.6ms | vsync: 0.7m
 | **recv** | Android | Time from start of `read()` to payload complete — mostly idle wait, not a bottleneck |
 | **lz4** | Android | LZ4 decompression |
 | **delta** | Android | NEON XOR delta apply |
-| **neon** | Android | Grey→RGBX pixel expansion (the expensive blit step) |
-| **vsync** | Android | Time in `ANativeWindow_unlockAndPost` after buffer is written |
+| **blit** | Android | GL shader grey→RGB expansion via `GL_LUMINANCE` texture + fragment shader |
+| **vsync** | Android | Time in `eglSwapBuffers` after GL draw completes |
 | **drops** | Android | Sequence gaps (frames lost in transit) |
 
 ### Machine-readable
@@ -157,7 +157,7 @@ All stages are now under 9ms. The pipeline is well-balanced with no single domin
 ### Phase 1 (high confidence, low-medium risk) — DONE
 
 1. ~~Add a latency-focused profile that defaults to 1024x768 (Comfortable).~~ — Resolution changes trigger pipeline restarts; not a reliable latency optimization. Sharp performs best due to capture stability.
-2. ✓ Backpressure is now adaptive (RTT/inflight-aware): `max(1, min(4, Int(30.0 / rttAvgMs)))`.
+2. ✓ Backpressure is now adaptive (RTT/inflight-aware): `max(2, min(6, Int(120.0 / rttMs)))` (updated in Phase 4 for 60fps).
 3. ✓ Forced keyframe recovery preserved. Skipped frames dropped from ~20 to 0-4.
 4. ✓ `SCStreamConfiguration.queueDepth` reduced from 3→2. P95 latency improved 13%.
 
