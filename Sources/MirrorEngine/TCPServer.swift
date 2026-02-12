@@ -26,6 +26,7 @@ class TCPServer {
     var lastKeyframeData: Data?
     var onClientCountChanged: ((Int) -> Void)?
     var onLatencyStats: ((LatencyStats) -> Void)?
+    private(set) var latencyStats: LatencyStats?
     var frameWidth: UInt16 = 1024 {
         didSet { lock.lock(); lastKeyframeData = nil; lock.unlock() }
     }
@@ -188,6 +189,7 @@ class TCPServer {
                              stats.rttMs, stats.rttAvgMs, stats.rttP95Ms, stats.rttMinMs, stats.rttMaxMs, stats.acksReceived))
             }
 
+            latencyStats = stats
             onLatencyStats?(stats)
         }
     }
