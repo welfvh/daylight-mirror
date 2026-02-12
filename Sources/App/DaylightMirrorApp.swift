@@ -163,7 +163,7 @@ struct SetupView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                featureRow("bolt.fill", "30 FPS, under 10ms latency")
+                featureRow("bolt.fill", "60 FPS, under 11ms latency")
                 featureRow("eye", "Lossless greyscale — no compression artifacts")
                 featureRow("keyboard", "Shortcuts for brightness, warmth, and more")
             }
@@ -556,7 +556,7 @@ struct MirrorMenuView: View {
                 statsRow("Total frames", "\(engine.totalFrames)")
                 statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
                 statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
-                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 30.0) * 100))
+                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 60.0) * 100))
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 4)
