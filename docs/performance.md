@@ -7,17 +7,17 @@ How to measure, profile, and optimize latency in Daylight Mirror.
 ```
 Mac                              USB                 Daylight DC-1
 ┌──────────────────┐         ┌───────┐         ┌──────────────────┐
-│ SCStream capture │──BGRA──▶│       │         │                  │
+│ CGDisplayStream  │──BGRA──▶│       │         │                  │
 │ vImage greyscale │──grey──▶│       │  TCP    │ LZ4 decompress   │
 │ LZ4 delta compress│─bytes─▶│  USB  │────────▶│ XOR delta apply  │
-│                  │         │       │         │ NEON grey→RGBX   │
-│                  │◀──ACK───│       │◀───ACK──│ ANativeWindow    │
+│                  │         │       │         │ GL shader blit   │
+│                  │◀──ACK───│       │◀───ACK──│ eglSwapBuffers   │
 └──────────────────┘         └───────┘         └──────────────────┘
 ```
 
 Every frame follows this pipeline:
 
-1. **Capture** — SCStream delivers a BGRA pixel buffer at 30fps
+1. **Capture** — CGDisplayStream delivers an IOSurface with BGRA pixels at 60fps
 2. **Greyscale** — vImage SIMD converts BGRA→grey (1 byte/pixel)
 3. **Compress** — LZ4 compresses either a full keyframe or XOR delta against the previous frame
 4. **Transmit** — TCP over USB sends `[DA 7E][flags][seq][len][payload]`
@@ -77,9 +77,9 @@ FPS: 28.5 | recv: 20.0ms | lz4: 3.0ms | delta: 4.6ms | neon: 5.6ms | vsync: 0.7m
 | **FPS** | Both | Frames actually processed per second |
 | **Greyscale** | Mac | vImage BGRA→grey conversion |
 | **LZ4 compress** | Mac | Compression time (keyframe or delta) |
-| **Jitter** | Mac | Deviation from expected 33ms frame interval |
+| **Jitter** | Mac | Deviation from expected 16.6ms frame interval |
 | **RTT avg/P95** | Mac | Time from `broadcast()` to ACK received |
-| **Skipped frames** | Mac | Frames dropped by backpressure (inflight > 1) |
+| **Skipped frames** | Mac | Frames dropped by backpressure (inflight > adaptive threshold, except scheduled keyframes) |
 | **recv** | Android | Time from start of `read()` to payload complete — mostly idle wait, not a bottleneck |
 | **lz4** | Android | LZ4 decompression |
 | **delta** | Android | NEON XOR delta apply |
@@ -97,53 +97,181 @@ cat /tmp/daylight-mirror.status
 daylight-mirror latency
 ```
 
-## Current Baseline (v1.3, 1600x1200 Sharp)
+## Current Baseline (v1.3 + Phase 4, 1600x1200 Sharp, 60fps)
 
 | Stage | Time | % of pipeline |
 |-------|------|---------------|
-| Capture delay (avg) | 16.7 ms | 47% |
-| Mac processing | 1.9 ms | 5% |
-| USB transit | ~1.5 ms | 4% |
-| LZ4 decompress | 3.0 ms | 9% |
-| Delta apply | 4.6 ms | 13% |
-| NEON grey→RGBX | 5.6 ms | 16% |
-| Vsync wait | 0.7 ms | 2% |
-| USB return (ACK) | ~1.5 ms | 4% |
-| **Total** | **~35.5 ms** | |
+| Capture delay (avg) | 8.3 ms | 37% |
+| Mac processing | 2.8 ms | 12% |
+| USB transit | ~1.5 ms | 7% |
+| LZ4 decompress | 3.1 ms | 14% |
+| Delta apply | 3.6 ms | 16% |
+| GL shader blit | 3.3 ms | 15% |
+| Vsync wait | 1.9 ms | 8% |
+| USB return (ACK) | ~1.5 ms | 7% |
+| **Total** | **~22.5 ms** | |
 
-Measured RTT: 23.5ms avg, 44.3ms P95 (ACK sent after decode, before blit).
+Measured RTT: 10.5ms avg, 23.0ms P95. FPS: 60.0 Mac / 60.0 Android.
 
 ## Where Time Is Spent
 
-### Capture delay — 16.7ms (47%)
+### Capture delay — 8.3ms (37%)
 
-At 30fps, a screen change waits on average half a frame interval (16.7ms) before SCStream captures it. This is the single largest contributor and is inherent to 30fps.
+At 60fps, a screen change waits on average half a frame interval (8.3ms) before CGDisplayStream captures it. This was halved from 16.7ms by migrating from SCStream (capped at 30fps on mirrored displays) to CGDisplayStream.
 
-**To reduce**: Increase capture FPS. But Android currently needs ~14ms to render each frame, so 60fps causes ~50% frame drops and visible stutter. This only becomes viable once Android render time drops below ~8ms.
+### Delta apply — 3.6ms (16%)
 
-### NEON grey→RGBX — 5.6ms (16%)
+NEON XOR of 1.92M bytes with 64-byte unrolled loop + prefetch hints. Memory-bandwidth bound.
 
-The Android blit expands 1 byte/pixel greyscale to 4 bytes/pixel RGBX using ARM NEON SIMD (`vst4q_u8`). At 1600x1200 that's writing 7.68MB of pixel data per frame. This is memory-bandwidth bound.
+### GL shader blit — 3.3ms (15%)
 
-**To reduce**: See [R8_UNORM](#r8_unorm-single-channel-surface) and [GL shader pipeline](#gl-shader-pipeline) below.
+GL_LUMINANCE texture upload + fragment shader grey→RGB expansion + `eglSwapBuffers`. Replaced the 5.6ms NEON CPU blit.
 
-### Delta apply — 4.6ms (13%)
+### LZ4 decompress — 3.1ms (14%)
 
-NEON XOR of 1.92M bytes. Also memory-bandwidth bound (`veorq_u8` on 16 bytes/iteration).
+LZ4 is already one of the fastest decompressors. Delta frames compress well (~7KB idle, ~300KB active), keyframes ~1.4MB.
 
-**To reduce**: This is already optimal for CPU. Only way to improve is reducing pixel count (lower resolution) or doing the XOR in a GPU shader.
+### Mac processing — 2.8ms (12%)
 
-### LZ4 decompress — 3.0ms (9%)
-
-LZ4 is already one of the fastest decompressors. Delta frames compress well (~300KB), keyframes less so (~1MB).
-
-**To reduce**: Marginal. Could try LZ4 HC on Mac side for better compression ratios (smaller payloads → faster decompress), but HC compression is slower.
-
-### Mac processing — 1.9ms (5%)
-
-Already fast. vImage SIMD greyscale (0.4ms) + LZ4 compress (1.5ms).
+vImage SIMD greyscale (1.2ms) + LZ4 compress (1.6ms). Fast.
 
 ## Optimization Opportunities
+
+### Research Synthesis (Feb 2026)
+
+Recent internal + external research confirms the existing profile in this doc: the most valuable work is on Android render-path memory bandwidth, not Mac capture/greyscale/compress.
+
+### Confirmed bottleneck order (Sharp 1600x1200, post all Phase 1-4 optimizations, 60fps)
+
+1. Capture delay (60fps cadence): 8.3ms
+2. Android delta XOR apply: 3.6ms
+3. Android GL shader blit: 3.3ms
+4. Android LZ4 decompress: 3.1ms
+5. Mac processing total: 1.2ms grey + 1.6ms LZ4 = 2.8ms
+6. Android vsync: 1.9ms
+
+All stages are now under 9ms. The pipeline is well-balanced with no single dominant bottleneck.
+
+### Recommended Execution Plan
+
+### Phase 1 (high confidence, low-medium risk) — DONE
+
+1. ~~Add a latency-focused profile that defaults to 1024x768 (Comfortable).~~ — Resolution changes trigger pipeline restarts; not a reliable latency optimization. Sharp performs best due to capture stability.
+2. ✓ Backpressure is now adaptive (RTT/inflight-aware): `max(1, min(4, Int(30.0 / rttAvgMs)))`.
+3. ✓ Forced keyframe recovery preserved. Skipped frames dropped from ~20 to 0-4.
+4. ✓ `SCStreamConfiguration.queueDepth` reduced from 3→2. P95 latency improved 13%.
+
+Outcome: P95 RTT 21.6→18.8ms, frame skipping nearly eliminated, zero regression in FPS or avg RTT.
+
+### Phase 2 (highest upside) — DONE
+
+GL shader blit path on Android: greyscale uploaded as GL_LUMINANCE texture, expanded to RGB in fragment shader, presented via `eglSwapBuffers` with `eglSwapInterval(0)`. Falls back to NEON blit if GL init fails.
+
+Results (Sharp 1600x1200, Feb 2026 lab sweep):
+
+| Metric | Before GL (NEON) | After GL shader |
+|--------|-----------------|-----------------|
+| Blit time | 5.6ms | 3.9ms (-30%) |
+| RTT avg | 14.2ms | 13.3ms (-6%) |
+| RTT P95 | 18.8ms | 16.3ms (-13%) |
+| Skipped | 0-4 | 0 |
+
+Combined Phase 1+2 vs original baseline:
+
+| Metric | Original | After all opts |
+|--------|---------|----------------|
+| RTT avg | 14.3ms | 13.3ms (-7%) |
+| RTT P95 | 21.6ms | 16.3ms (-25%) |
+| Skipped | 20 | 0 |
+
+### Phase 3 (incremental) — DONE
+
+Wider NEON delta XOR: unrolled `apply_delta_neon()` from 16-byte to 64-byte per iteration (4x NEON vectors per loop body). Reduces iteration count from 120K to 30K for 1600x1200.
+
+Results (Sharp 1600x1200, Feb 2026 lab sweep):
+
+| Metric | Before (16B/iter) | After (64B/iter) |
+|--------|-------------------|------------------|
+| delta_ms | 5.5ms | 4.9ms (-11%) |
+| neon_ms (blit) | 3.9ms | 3.6ms (-8%) |
+| RTT avg | 13.3ms | 12.9ms (-3%) |
+| RTT P95 | 16.3ms | 16.1ms (-1%) |
+| Skipped | 0 | 0 |
+
+Cumulative Phase 1+2+3 vs original baseline:
+
+| Metric | Original | Phase 3 |
+|--------|---------|---------|
+| RTT avg | 14.3ms | 12.9ms (-10%) |
+| RTT P95 | 21.6ms | 16.1ms (-25%) |
+| Blit (Android) | 5.6ms | 3.6ms (-36%) |
+| Delta XOR | 4.6ms | 4.9ms* |
+| Skipped | 20 | 0 |
+
+*Delta XOR increased slightly vs Phase 1 baseline due to GL shader path changing measurement context; absolute time is 4.9ms down from pre-unroll 5.5ms.
+
+### Phase 4 (60fps via CGDisplayStream) — DONE
+
+Replaced SCStream (ScreenCaptureKit) with CGDisplayStream for frame capture. SCStream was hard-capped at ~30fps on mirrored virtual displays — a macOS limitation. CGDisplayStream (deprecated in macOS 15 SDK but still present at runtime) achieves 60fps on the same display.
+
+Changes:
+- `ScreenCapture.swift`: Complete rewrite of capture backend. SCStream → CGDisplayStream via `dlsym` (runtime loading bypasses SDK deprecation). Frame callback receives `IOSurfaceRef` instead of `CMSampleBuffer`. All downstream processing (vImage greyscale, LZ4 delta, TCP broadcast) unchanged.
+- `CompositorPacer.swift`: CADisplayLink preferred rate 30→60Hz, timer fallback 33ms→16ms.
+- Backpressure formula: `max(2, min(6, Int(120.0 / max(rtt, 1.0))))` — allows more inflight frames at 60fps.
+
+Results (Sharp 1600x1200, Feb 2026):
+
+| Metric | Phase 3 (30fps) | Phase 4 (60fps) | Change |
+|--------|-----------------|-----------------|--------|
+| FPS (Mac) | 29.3 | 60.0 | **+105%** |
+| FPS (Android) | 29.3 | 60.0 | **+105%** |
+| RTT avg | 12.9ms | 10.5ms | -19% |
+| RTT P95 | 16.1ms | 23.0ms | +43%* |
+| Grey convert | 2.1ms | 1.2ms | -43% |
+| LZ4 + delta | 3.5ms | 1.6ms | -54% |
+| Jitter | 0.6ms | 0.3ms | -50% |
+| Skipped | 0 | 254 (warmup only) | Stable after warmup |
+
+*P95 increased because 2x more frames in the pipeline creates more tail variance, but absolute P95 of 23ms is still excellent at 60fps (under 1.5 frame periods).
+
+### Cumulative Phase 1+2+3+4 vs original baseline:
+
+| Metric | Original | Current |
+|--------|---------|---------|
+| FPS | 29.3 | **60.0 (+105%)** |
+| RTT avg | 14.3ms | **10.5ms (-27%)** |
+| RTT P95 | 21.6ms | 23.0ms (+6%) |
+| Blit (Android) | 5.6ms | **3.3ms (-41%)** |
+| Delta XOR | 4.6ms | **3.6ms (-22%)** |
+| Grey convert (Mac) | 1.4ms | **1.2ms (-14%)** |
+| LZ4 compress (Mac) | 4.3ms | **1.6ms (-63%)** |
+| Skipped | 20 | 0 (steady state) |
+
+### Updated bottleneck order (post Phase 1-2-3-4, 60fps)
+
+1. Capture delay (60fps cadence): 8.3ms avg wait
+2. Android delta XOR: 3.6ms
+3. Android GL shader blit: 3.3ms
+4. Android LZ4 decompress: 3.1ms
+5. Mac grey+compress: 2.8ms
+6. Android vsync: 1.9ms
+
+### Experiment Rules (to avoid regressions)
+
+For each optimization, run the same evaluation loop:
+
+1. Capture baseline with `daylight-mirror latency --watch` and Android logcat stats.
+2. Apply one change at a time.
+3. Compare: FPS stability, skipped/overwritten frames, RTT avg/P95, subjective cursor smoothness.
+4. Keep change only if metrics improve without introducing visual instability.
+
+### External Research Notes (applied to this codebase)
+
+- CGDisplayStream (deprecated but runtime-available) is the only path to >30fps capture on mirrored virtual displays. SCStream has an internal cap. DeskPad (github.com/Stengo/DeskPad) also uses CGDisplayStream for this reason.
+- ScreenCaptureKit guidance generally favors minimizing queued work and dropping late frames instead of building latency. This aligns with current backpressure behavior in `ScreenCapture.swift`.
+- Android guidance confirms `ANativeWindow` + CPU blit paths are sensitive to memory bandwidth and compositor constraints for single-channel formats; this matches observed `R8_UNORM` limitations in this project.
+- DC-1 panel (MT6789/Helio G99) supports 6/10/15/24/30/45/60/72/90/120 Hz. Currently runs at 60Hz via `Surface.setFrameRate(60.0f)`.
+- This project should prefer measured pipeline wins over generic platform tuning folklore; each step above is intentionally test-first.
 
 ### GL shader pipeline
 
@@ -198,19 +326,43 @@ Total Android render: ~14ms → ~6ms. This would make 60fps viable.
 
 The code is still in `mirror_native.c` behind `g_r8_supported = 0` if a future Android version adds support.
 
-### 60fps capture
+### 60fps via SCStream (failed) → CGDisplayStream (succeeded)
 
 **Goal**: Halve capture delay from 16.7ms to 8.3ms.
 
-At 60fps, Mac sends frames every 16.7ms but Android needs ~14ms to render each one. The frame-skip logic drops ~50% of frames, causing the cursor to visibly jump instead of moving smoothly. Smooth 28fps is perceptually better than choppy 28fps-with-gaps.
+SCStream (ScreenCaptureKit) is hard-capped at ~30fps on mirrored virtual displays regardless of `minimumFrameInterval` setting. This is a macOS limitation — the WindowServer only delivers frames at the mirrored display's compositor rate.
 
-Only viable once Android render time drops below ~8ms (e.g., after GL shader pipeline + lower resolution).
+CGDisplayStream (deprecated in macOS 15 SDK but still present at runtime) does NOT have this limitation and delivers 60fps on the same virtual display. Confirmed via `dlsym` + POC: 302 frames in 5.1s = 59.3fps. Now integrated as the production capture backend (Phase 4).
 
 ### queueDepth 1
 
 **Goal**: Reduce SCStream buffering delay.
 
 `SCStreamConfiguration.queueDepth = 1` causes SCStream to stall frame delivery entirely. The first frame renders but no subsequent frames arrive. queueDepth 3 (default) works reliably.
+
+### queueDepth 2 + adaptive backpressure ✓ (SCStream era, now CGDisplayStream)
+
+**Goal**: Reduce capture-to-delivery latency without stalling.
+
+Combined two changes (during SCStream era):
+1. `SCStreamConfiguration.queueDepth = 2` (was 3) — fewer buffers in the ScreenCaptureKit pool
+2. Adaptive backpressure threshold based on RTT — replaces fixed `inflight > 2`
+
+Now using CGDisplayStream (Phase 4), backpressure formula is `max(2, min(6, Int(120.0 / max(rtt, 1.0)))`.
+
+**Results** (Sharp 1600x1200, Feb 2026 lab sweep):
+
+| Metric         | Before (qD=3, fixed) | After (qD=2, adaptive) |
+|----------------|----------------------|------------------------|
+| FPS            | 29.3                 | 29.3                   |
+| RTT avg        | 14.3ms               | 14.2ms                 |
+| RTT P95        | 21.6ms               | 18.8ms (-13%)          |
+| Grey ms        | 1.4ms                | 0.8ms (-43%)           |
+| LZ4 compress   | 4.3ms                | 1.5ms (-65%)           |
+| Jitter         | 0.8ms                | 0.9ms                  |
+| Skipped frames | 20                   | 0-4                    |
+
+P95 tail latency improved 13% and frame skipping was nearly eliminated. The adaptive threshold at 14ms RTT computes to 2 (same as old fixed threshold), but dynamically tightens under congestion and loosens when the pipe is clear.
 
 ## Protocol Reference
 
