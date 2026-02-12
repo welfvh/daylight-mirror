@@ -103,6 +103,7 @@ class MirrorActivity : Activity() {
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
+                holder.surface.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                 nativeStart(holder.surface, "127.0.0.1", 8888)
             }
 
