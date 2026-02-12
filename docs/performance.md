@@ -273,48 +273,29 @@ For each optimization, run the same evaluation loop:
 - DC-1 panel (MT6789/Helio G99) supports 6/10/15/24/30/45/60/72/90/120 Hz. Currently runs at 60Hz via `Surface.setFrameRate(60.0f)`.
 - This project should prefer measured pipeline wins over generic platform tuning folklore; each step above is intentionally test-first.
 
-### GL shader pipeline
+### Remaining Opportunities (Phase 5+)
 
-**Expected savings: ~5ms (eliminates NEON blit)**
+Current state: 57fps locked, zero drops, 10.5ms RTT avg over 3+ hours of real-world use (YouTube, scrolling, PR review). These are diminishing-returns optimizations — user-perceptible improvements are unlikely, but they could close the 57→60fps gap.
 
-Replace `ANativeWindow_lock` + CPU blit with an EGL/OpenGL pipeline:
+#### 57→60fps gap
 
-1. Create an EGL context and bind to the ANativeWindow surface
-2. Upload decompressed greyscale as a `GL_LUMINANCE` or `GL_R8` texture
-3. Fragment shader expands grey→RGBX: `gl_FragColor = vec4(grey, grey, grey, 1.0)`
-4. `eglSwapBuffers` presents
+We consistently hit 57.3fps instead of 60.0. Android processing totals ~14.7ms with only 1.9ms of headroom before the 16.6ms vsync deadline. Any single-frame spike (GC pause, large delta, compositor hiccup) misses the deadline. Three approaches:
 
-The GPU handles grey→RGBX expansion in parallel with zero CPU memory bandwidth cost. Also enables `eglSwapInterval(0)` to skip vsync blocking.
+1. **Investigate vsync wait time** — Android reports 4.0–4.6ms in `eglSwapBuffers`, which seems high for `eglSwapInterval(0)`. If the swap interval isn't actually being honored, fixing it would recover ~2ms of headroom.
 
-**Complexity**: Medium. Requires EGL setup (~100 lines), shader compilation, and texture upload per frame. The texture upload (`glTexImage2D`) itself takes time but should be faster than the CPU NEON expansion since GPU memory controllers are optimized for bulk transfers.
+2. **GPU-side delta XOR** — The 3.2ms NEON XOR could move to a compute or fragment shader. CPU wouldn't touch pixel data at all: LZ4 decompresses into a GPU-mapped buffer, shader XORs against previous frame, same shader expands grey→RGB. Eliminates ~3ms of CPU work.
 
-### Double-buffer decompress and blit
+3. **Double-buffer pipelining** — Overlap next frame's recv+decompress with current frame's blit:
+   ```
+   Current:  [recv][lz4][delta][blit]  [recv][lz4][delta][blit]
+   Pipelined: [recv][lz4][delta][blit]
+                            [recv][lz4][delta][blit]
+   ```
+   Requires a second decode buffer and a producer-consumer thread. Medium complexity but would absorb the heavy-delta dips (48-54fps during fast scrolling) by hiding recv+decompress latency behind blit.
 
-**Expected savings: ~5ms (overlaps blit with next frame's recv)**
+#### Heavy-content dips
 
-Current pipeline is serial:
-```
-[recv][lz4][delta][blit]  [recv][lz4][delta][blit]
-```
-
-With double buffering:
-```
-[recv][lz4][delta][blit]
-                  [recv][lz4][delta][blit]
-```
-
-While the current frame is being blitted, the next frame's recv+decompress happens in parallel. Requires two copies of `g_current_frame` and a mutex/condition variable for synchronization.
-
-**Complexity**: Medium. Adds a second thread and synchronization, but the logic is straightforward producer-consumer.
-
-### Lower resolution
-
-At 1024x768 (Comfortable), pixel count drops from 1.92M to 786K (2.4x less). Expected per-frame savings:
-- NEON blit: 5.6ms → ~2.3ms
-- Delta apply: 4.6ms → ~1.9ms
-- LZ4 decompress: 3.0ms → ~1.5ms
-
-Total Android render: ~14ms → ~6ms. This would make 60fps viable.
+During fast scrolling or video playback, delta sizes spike to 300–744KB. LZ4 decompression scales with payload size, pushing total processing past 16.6ms for 2–3 frames. Double-buffer pipelining (above) is the most direct fix. Alternatively, LZ4 HC compression on the Mac side would shrink payloads (better ratio, same decompress speed) at the cost of slower Mac-side compression — but Mac processing is only 2.8ms, so there's budget.
 
 ## What We Tried and Why It Didn't Work
 
