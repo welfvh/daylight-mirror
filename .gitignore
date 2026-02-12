@@ -11,3 +11,4 @@ android/app/.cxx/
 android/local.properties
 # Downloaded platform-tools (adb binary for embedding)
 tools/
+.DS_Store
