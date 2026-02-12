@@ -45,11 +45,32 @@ adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk
 
 ### Build from source
 
+**Mac app only** (no Android SDK needed):
+
 ```bash
 git clone https://github.com/welfvh/daylight-mirror
 cd daylight-mirror
 make install    # Mac menu bar app → ~/Applications
-make deploy     # Android APK → Daylight (requires Android SDK)
+```
+
+**Android APK** (requires Android SDK + NDK):
+
+```bash
+# Install JDK 17 (Gradle does not support newer versions)
+brew install openjdk@17
+export JAVA_HOME="$(brew --prefix openjdk@17)/libexec/openjdk.jdk/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Install Android SDK, NDK, and CMake
+brew install --cask android-commandlinetools
+sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264" "cmake;3.22.1"
+
+# Point Gradle to the SDK
+echo "sdk.dir=$(brew --prefix)/share/android-commandlinetools" > android/local.properties
+
+# Build and deploy
+make android    # Build APK
+make deploy     # Install APK on connected Daylight
 ```
 
 </details>
