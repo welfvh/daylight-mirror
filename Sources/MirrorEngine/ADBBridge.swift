@@ -15,11 +15,13 @@ struct ADBBridge {
     /// Resolved path to the adb binary. Prefers system adb (user-managed, up-to-date),
     /// falls back to bundled copy (for users without Homebrew/Android SDK).
     private static let resolvedADBPath: String? = {
-        // 1. System adb on PATH — check common locations directly since GUI apps
-        //    don't have Homebrew paths in their PATH.
+        // 1. Well-known install locations. GUI apps launched from Finder/Spotlight
+        //    have a minimal PATH that excludes Homebrew and Android SDK directories.
+        //    Check the common paths directly — fast and avoids spawning a shell.
         let knownPaths = [
-            "/opt/homebrew/bin/adb",      // Apple Silicon Homebrew
-            "/usr/local/bin/adb",          // Intel Homebrew
+            "/opt/homebrew/bin/adb",                                             // Homebrew (Apple Silicon)
+            "/usr/local/bin/adb",                                                // Homebrew (Intel)
+            NSHomeDirectory() + "/Library/Android/sdk/platform-tools/adb",       // Android Studio
         ]
         for path in knownPaths {
             if FileManager.default.isExecutableFile(atPath: path) {
@@ -42,20 +44,6 @@ struct ADBBridge {
            !path.isEmpty {
             NSLog("[ADB] Using system adb (via which): %@", path)
             return path
-        }
-        // 2. Well-known install locations. GUI apps launched from Finder/Spotlight
-        //    have a minimal PATH that excludes Homebrew and Android SDK directories,
-        //    so `which` above will miss them. Check the common paths directly.
-        let knownPaths = [
-            "/opt/homebrew/bin/adb",                                             // Homebrew (Apple Silicon)
-            "/usr/local/bin/adb",                                                // Homebrew (Intel)
-            NSHomeDirectory() + "/Library/Android/sdk/platform-tools/adb",       // Android Studio
-        ]
-        for path in knownPaths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                print("[ADB] Using system adb: \(path)")
-                return path
-            }
         }
         // 3. Fallback: bundled adb inside the .app bundle (Resources/adb).
         //    Only used when no system adb exists. May be stale — `make fetch-adb`
