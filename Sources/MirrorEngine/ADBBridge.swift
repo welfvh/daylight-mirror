@@ -43,13 +43,29 @@ struct ADBBridge {
             NSLog("[ADB] Using system adb (via which): %@", path)
             return path
         }
+        // 2. Well-known install locations. GUI apps launched from Finder/Spotlight
+        //    have a minimal PATH that excludes Homebrew and Android SDK directories,
+        //    so `which` above will miss them. Check the common paths directly.
+        let knownPaths = [
+            "/opt/homebrew/bin/adb",                                             // Homebrew (Apple Silicon)
+            "/usr/local/bin/adb",                                                // Homebrew (Intel)
+            NSHomeDirectory() + "/Library/Android/sdk/platform-tools/adb",       // Android Studio
+        ]
+        for path in knownPaths {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                print("[ADB] Using system adb: \(path)")
+                return path
+            }
+        }
         // 3. Fallback: bundled adb inside the .app bundle (Resources/adb).
+        //    Only used when no system adb exists. May be stale — `make fetch-adb`
+        //    downloads latest at build time but won't auto-update.
         if let bundled = Bundle.main.resourcePath.map({ $0 + "/adb" }),
            FileManager.default.isExecutableFile(atPath: bundled) {
             NSLog("[ADB] Using bundled adb (no system adb found): %@", bundled)
             return bundled
         }
-        NSLog("[ADB] No adb binary found (checked known paths + which + bundle)")
+        print("[ADB] No adb binary found (checked PATH, known locations, and bundle)")
         return nil
     }()
 
