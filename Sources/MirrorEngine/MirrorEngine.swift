@@ -243,7 +243,7 @@ public class MirrorEngine: ObservableObject {
 
     @MainActor
     public func start() async {
-        guard status == .idle || status != .starting else { return }
+        guard status == .idle || status == .waitingForDevice else { return }
 
         // Disable font smoothing for cleaner greyscale rendering on e-ink
         if fontSmoothingDisabled {

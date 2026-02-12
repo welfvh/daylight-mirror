@@ -9,8 +9,15 @@ import Foundation
 class USBDeviceMonitor {
     private var timer: DispatchSourceTimer?
     private var wasConnected = false
+    private var disconnectCount = 0
     var onDeviceConnected: (() -> Void)?
     var onDeviceDisconnected: (() -> Void)?
+
+    /// Number of consecutive "not connected" polls before firing a disconnect event.
+    /// At 2s polling interval, 3 misses = 6 seconds of confirmed absence.
+    /// Prevents transient adb hiccups (concurrent commands, server restarts) from
+    /// triggering false disconnect → reconnect → relaunch cycles.
+    private let disconnectThreshold = 3
 
     func start() {
         guard ADBBridge.isAvailable() else {
@@ -22,14 +29,21 @@ class USBDeviceMonitor {
         t.setEventHandler { [weak self] in
             guard let self = self else { return }
             let connected = ADBBridge.connectedDevice() != nil
-            if connected && !self.wasConnected {
-                self.wasConnected = true
-                print("[USB] Device connected")
-                DispatchQueue.main.async { self.onDeviceConnected?() }
-            } else if !connected && self.wasConnected {
-                self.wasConnected = false
-                print("[USB] Device disconnected")
-                DispatchQueue.main.async { self.onDeviceDisconnected?() }
+            if connected {
+                self.disconnectCount = 0
+                if !self.wasConnected {
+                    self.wasConnected = true
+                    print("[USB] Device connected")
+                    DispatchQueue.main.async { self.onDeviceConnected?() }
+                }
+            } else if self.wasConnected {
+                self.disconnectCount += 1
+                if self.disconnectCount >= self.disconnectThreshold {
+                    self.wasConnected = false
+                    self.disconnectCount = 0
+                    print("[USB] Device disconnected (confirmed after \(self.disconnectThreshold) polls)")
+                    DispatchQueue.main.async { self.onDeviceDisconnected?() }
+                }
             }
         }
         t.resume()
