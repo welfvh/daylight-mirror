@@ -11,3 +11,6 @@ android/app/.cxx/
 android/local.properties
 # Downloaded platform-tools (adb binary for embedding)
 tools/
+# Latency lab outputs (keep example plan, ignore local plans and results)
+experiments/results/
+experiments/*.local.json

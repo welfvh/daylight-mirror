@@ -1,0 +1,104 @@
+{
+  "baseline_id": "baseline-sharp",
+  "status_file": "/tmp/daylight-mirror.status",
+  "poll_interval_s": 2.0,
+  "default_warmup_s": 8,
+  "default_measure_s": 25,
+  "command_timeout_s": 300,
+  "results_dir": "experiments/results",
+  "git": {
+    "use_worktrees": true,
+    "base_ref": "main",
+    "worktree_root": "../daylight-mirror-lab"
+  },
+  "daemon": {
+    "mode": "manual",
+    "start": [
+      "daylight-mirror",
+      "start"
+    ],
+    "stop": [
+      "daylight-mirror",
+      "stop"
+    ],
+    "startup_wait_s": 5
+  },
+  "gates": {
+    "fps_min": 26,
+    "jitter_ms_max": 6.0,
+    "skipped_frames_delta_max": 30,
+    "rtt_avg_delta_max": 4.0,
+    "rtt_p95_delta_max": 8.0
+  },
+  "experiments": [
+    {
+      "id": "baseline-sharp",
+      "branch": "exp/baseline-sharp",
+      "commands": [
+        [
+          "swift",
+          "build",
+          "-c",
+          "release"
+        ],
+        [
+          "daylight-mirror",
+          "resolution",
+          "sharp"
+        ],
+        [
+          "daylight-mirror",
+          "sharpen",
+          "1.0"
+        ],
+        [
+          "daylight-mirror",
+          "contrast",
+          "1.0"
+        ]
+      ],
+      "notes": "Control baseline"
+    },
+    {
+      "id": "policy-comfortable",
+      "branch": "exp/policy-comfortable",
+      "commands": [
+        [
+          "swift",
+          "build",
+          "-c",
+          "release"
+        ],
+        [
+          "daylight-mirror",
+          "resolution",
+          "comfortable"
+        ]
+      ],
+      "notes": "Policy-only test: lower pixel count"
+    },
+    {
+      "id": "policy-comfortable-lowsharpen",
+      "branch": "exp/policy-comfortable-lowsharpen",
+      "commands": [
+        [
+          "swift",
+          "build",
+          "-c",
+          "release"
+        ],
+        [
+          "daylight-mirror",
+          "resolution",
+          "comfortable"
+        ],
+        [
+          "daylight-mirror",
+          "sharpen",
+          "0.6"
+        ]
+      ],
+      "notes": "Policy-only test: reduce convolution cost"
+    }
+  ]
+}
