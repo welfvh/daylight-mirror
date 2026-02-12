@@ -21,7 +21,7 @@ APK := android/app/build/outputs/apk/debug/app-debug.apk
 PLATFORM_TOOLS_DIR := tools/platform-tools
 ADB_BINARY := $(PLATFORM_TOOLS_DIR)/adb
 
-.PHONY: mac android install deploy run clean test fetch-adb
+.PHONY: mac android install deploy run clean test fetch-adb reset-permissions
 
 # Build Mac menu bar app
 mac:
@@ -91,6 +91,13 @@ run: mac
 tunnel:
 	adb reverse tcp:8888 tcp:8888
 	@echo "Tunnel ready: device:8888 → mac:8888"
+
+# Reset TCC permissions (needed after reinstall since ad-hoc codesign invalidates them)
+reset-permissions:
+	@echo "Resetting TCC permissions for Daylight Mirror..."
+	@tccutil reset ScreenCapture com.daylight.mirror
+	@tccutil reset Accessibility com.daylight.mirror
+	@echo "Done. Reopen the app to re-grant permissions."
 
 # Run unit tests
 test:
