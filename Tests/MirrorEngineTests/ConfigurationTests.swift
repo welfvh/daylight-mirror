@@ -34,7 +34,7 @@ final class ConfigurationTests: XCTestCase {
     }
 
     func testNonCozyAreNotHiDPI() {
-        let nonCozy: [DisplayResolution] = [.comfortable, .balanced, .sharp, .widescreen,
+        let nonCozy: [DisplayResolution] = [.comfortable, .balanced, .sharp,
                                             .portraitComfortable, .portraitBalanced, .portraitSharp]
         for res in nonCozy {
             XCTAssertFalse(res.isHiDPI, "\(res.label) should not be HiDPI")
@@ -74,11 +74,6 @@ final class ConfigurationTests: XCTestCase {
     func testKeyframeIntervalMatchesFPS() {
         XCTAssertEqual(KEYFRAME_INTERVAL, TARGET_FPS,
             "Keyframe interval should equal TARGET_FPS (one keyframe per second)")
-    }
-
-    func testWidescreenIs16by10() {
-        let ratio = Double(DisplayResolution.widescreen.width) / Double(DisplayResolution.widescreen.height)
-        XCTAssertEqual(ratio, 16.0 / 10.0, accuracy: 0.01)
     }
 
     func testFrameHeaderSizeIs11() {

@@ -28,8 +28,6 @@ public enum DisplayResolution: String, CaseIterable, Identifiable {
     case comfortable = "1024x768"   // Larger UI, easy on the eyes
     case balanced    = "1280x960"   // Good middle ground
     case sharp       = "1600x1200"  // Maximum sharpness, 1:1 native pixel mapping
-    // Widescreen (16:10)
-    case widescreen  = "1440x900"   // Mac-native 16:10 aspect ratio, letterboxed on DC-1
     // Portrait (3:4)
     case portraitCozy        = "600x800"    // HiDPI 2x: 600x800pt → 1200x1600px — large UI, native sharpness
     case portraitComfortable = "768x1024"   // Larger UI, easy on the eyes
@@ -41,21 +39,18 @@ public enum DisplayResolution: String, CaseIterable, Identifiable {
     public var width: UInt {
         switch self {
         case .cozy: 1600; case .comfortable: 1024; case .balanced: 1280; case .sharp: 1600
-        case .widescreen: 1440
         case .portraitCozy: 1200; case .portraitComfortable: 768; case .portraitBalanced: 960; case .portraitSharp: 1200
         }
     }
     public var height: UInt {
         switch self {
         case .cozy: 1200; case .comfortable: 768; case .balanced: 960; case .sharp: 1200
-        case .widescreen: 900
         case .portraitCozy: 1600; case .portraitComfortable: 1024; case .portraitBalanced: 1280; case .portraitSharp: 1600
         }
     }
     public var label: String {
         switch self {
         case .cozy: "Cozy"; case .comfortable: "Comfortable"; case .balanced: "Balanced"; case .sharp: "Sharp"
-        case .widescreen: "Widescreen"
         case .portraitCozy: "Portrait Cozy"; case .portraitComfortable: "Portrait Comfortable"
         case .portraitBalanced: "Portrait Balanced"; case .portraitSharp: "Portrait Sharp"
         }
