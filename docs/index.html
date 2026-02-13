@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Daylight Mirror — Real-time Mac display for the Daylight DC-1</title>
-  <meta name="description" content="Turn your Daylight DC-1 into a real-time external display for your Mac. 30 FPS, under 10ms latency, lossless, zero GPU.">
+  <meta name="description" content="Turn your Daylight DC-1 into a real-time external display for your Mac. 60 FPS, under 10ms latency, lossless, zero GPU.">
 
   <!-- Open Graph -->
   <meta property="og:title" content="Daylight Mirror">
-  <meta property="og:description" content="Turn your Daylight DC-1 into a real-time external display for your Mac. 30 FPS, under 10ms latency, lossless, zero GPU.">
+  <meta property="og:description" content="Turn your Daylight DC-1 into a real-time external display for your Mac. 60 FPS, under 10ms latency, lossless, zero GPU.">
   <meta property="og:image" content="https://welfvh.github.io/daylight-mirror/images/nighttime-coding.jpg">
   <meta property="og:url" content="https://welfvh.github.io/daylight-mirror/">
   <meta property="og:type" content="website">
@@ -567,7 +567,7 @@
   <div class="stats-bar">
     <div class="stats-grid">
       <div class="stat">
-        <div class="stat-value">30 FPS</div>
+        <div class="stat-value">60 FPS</div>
         <div class="stat-label">Frame Rate</div>
       </div>
       <div class="stat">
@@ -586,58 +586,34 @@
   </div>
 
   <!-- ════════════════════════════════════════════════════════
-       How It Works
+       Social Proof
        ════════════════════════════════════════════════════════ -->
-  <section>
+  <section style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
     <div class="content">
-      <div class="section-label">Pipeline</div>
-      <h2>How it works</h2>
-      <p class="pipeline-text">
-        Your Mac creates a virtual 4:3 display, captures it with ScreenCaptureKit, converts to greyscale on CPU (vImage SIMD), delta-compresses with LZ4, and streams over USB to a native Android renderer. Every pixel is identical on both screens.
+      <div class="section-label">Community</div>
+      <h2>What people are saying</h2>
+      <p style="color: var(--muted); margin-bottom: 24px;">
+        55 stars on GitHub. 10 forks. Active contributors shipping features every week.
       </p>
 
-      <table class="evolution-table">
-        <thead>
-          <tr>
-            <th>Version</th>
-            <th>Pipeline</th>
-            <th>FPS</th>
-            <th>Bandwidth</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="dim">Part 1</td>
-            <td>VNC → adb → AVNC</td>
-            <td class="dim">~2</td>
-            <td class="dim">Unusable</td>
-          </tr>
-          <tr>
-            <td class="dim">Part 1</td>
-            <td>screencapture → JPEG → HTTP → Chrome</td>
-            <td class="dim">4–8</td>
-            <td class="dim">~3 MB/s</td>
-          </tr>
-          <tr>
-            <td class="dim">Part 1</td>
-            <td>SCStream → GPU greyscale → JPEG → WebSocket</td>
-            <td class="dim">30</td>
-            <td class="dim">~6 MB/s</td>
-          </tr>
-          <tr>
-            <td class="dim">Part 2</td>
-            <td>SCStream → vImage → LZ4 → WebSocket → Chrome</td>
-            <td class="dim">30</td>
-            <td class="dim">~0.5 MB/s</td>
-          </tr>
-          <tr>
-            <td>Part 3</td>
-            <td>SCStream → vImage → LZ4 delta → TCP → native NDK</td>
-            <td>30</td>
-            <td>~4 KB/frame</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="blog-grid">
+        <div class="blog-card">
+          <span class="part">GitHub</span>
+          <blockquote>"2x FPS, 27% lower RTT — 60fps mirror via CGDisplayStream, GL shaders, and NEON"</blockquote>
+          <p style="color: var(--muted); font-size: 11px; margin-top: 12px;">— @05bmckay, contributor (merged PR #29)</p>
+        </div>
+        <!-- TODO: Replace with real X/Twitter and private quotes -->
+        <div class="blog-card">
+          <span class="part">Community</span>
+          <blockquote>"Add your quote here — DM or tweet @welfvh"</blockquote>
+          <p style="color: var(--muted); font-size: 11px; margin-top: 12px;">— placeholder</p>
+        </div>
+        <div class="blog-card">
+          <span class="part">Community</span>
+          <blockquote>"Add your quote here — DM or tweet @welfvh"</blockquote>
+          <p style="color: var(--muted); font-size: 11px; margin-top: 12px;">— placeholder</p>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -652,7 +628,7 @@
       <div class="features-grid">
         <div class="feature-card">
           <h3>Resolution presets</h3>
-          <p>Four 4:3 presets from Cozy (800×600 HiDPI) to Sharp (1600×1200). Switch on the fly — no restart needed.</p>
+          <p>Seven presets — landscape and portrait — from Cozy (800×600 HiDPI) to Sharp (1600×1200). Switch on the fly.</p>
         </div>
         <div class="feature-card">
           <h3>Keyboard shortcuts</h3>
@@ -699,37 +675,6 @@
       <div>
         <img src="images/candle-reflection.jpg" alt="Daylight DC-1 with candle, reflective display showing Claude Code">
         <p class="gallery-caption">The DC-1's reflective display in ambient light — designed for this.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ════════════════════════════════════════════════════════
-       Blog Series
-       ════════════════════════════════════════════════════════ -->
-  <section style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
-    <div class="content">
-      <div class="section-label">Build Log</div>
-      <h2>How we got here</h2>
-      <p style="color: var(--muted); margin-bottom: 24px;">
-        The entire project was vibecoded in a single session with Claude. Three blog posts tell the story from VNC to native rendering.
-      </p>
-
-      <div class="blog-grid">
-        <a href="https://github.com/welfvh/daylight-mirror/blob/main/blog/part-1-from-vnc-to-raw-pixels.md" class="blog-card">
-          <span class="part">Part 1</span>
-          <h3>From VNC to Raw Pixels</h3>
-          <blockquote>"What started as 'just pipe VNC over adb' became a deep dive into display pipelines, pixel formats, and compression tradeoffs."</blockquote>
-        </a>
-        <a href="https://github.com/welfvh/daylight-mirror/blob/main/blog/part-2-killing-the-gpu.md" class="blog-card">
-          <span class="part">Part 2</span>
-          <h3>Killing the GPU</h3>
-          <blockquote>"The GPU was spinning. I'm HSP — highly sensitive to sensory input. The goal shifted: zero GPU usage. Not 'low GPU.' Zero."</blockquote>
-        </a>
-        <a href="https://github.com/welfvh/daylight-mirror/blob/main/blog/part-3-one-click.md" class="blog-card">
-          <span class="part">Part 3</span>
-          <h3>One Click</h3>
-          <blockquote>"The pipeline was fast. The experience was not. Five terminal commands became one click."</blockquote>
-        </a>
       </div>
     </div>
   </section>
@@ -842,6 +787,60 @@
         </div>
         <p style="margin-top: 10px; margin-bottom: 0;">Or <a href="https://github.com/welfvh/daylight-mirror/issues">open an issue on GitHub</a> — we respond fast.</p>
       </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════
+       How It Works (Pipeline)
+       ════════════════════════════════════════════════════════ -->
+  <section>
+    <div class="content">
+      <div class="section-label">Under the Hood</div>
+      <h2>How it works</h2>
+      <p class="pipeline-text">
+        CGDisplayStream captures the virtual display at 60 Hz. Each frame is converted to greyscale
+        via vImage, LZ4-delta compressed against the previous frame, and streamed over USB-TCP.
+        On the Daylight, a GL shader blit renders the greyscale texture at native refresh rate.
+      </p>
+
+      <table class="evolution-table">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Pipeline</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="dim">Part 1</td>
+            <td>SCStream → JPEG → WebSocket → Android WebView</td>
+            <td class="dim">15 FPS</td>
+          </tr>
+          <tr>
+            <td class="dim">Part 2</td>
+            <td>SCStream → vImage greyscale → LZ4 → TCP → Skia Canvas</td>
+            <td class="dim">20 FPS</td>
+          </tr>
+          <tr>
+            <td class="dim">Part 3</td>
+            <td>SCStream → vImage → LZ4 delta → TCP → GLES blit</td>
+            <td class="dim">30 FPS</td>
+          </tr>
+          <tr>
+            <td>Part 4</td>
+            <td>CGDisplayStream → vImage → LZ4 delta → TCP → GL shader blit</td>
+            <td>60 FPS</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="color: var(--muted); font-size: 12px; margin-top: 24px;">
+        Read the full build log:
+        <a href="https://welf.co/daylight-1">Part 1</a> ·
+        <a href="https://welf.co/daylight-2">Part 2</a> ·
+        <a href="https://welf.co/daylight-3">Part 3</a>
+      </p>
     </div>
   </section>
 
