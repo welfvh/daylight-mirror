@@ -6,26 +6,48 @@ package com.daylight.mirror
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Activity
+import android.text.Editable
+import android.text.TextWatcher
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.inputmethod.InputMethodManager
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
+import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.io.BufferedOutputStream
+import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 class MirrorActivity : Activity() {
 
     companion object {
         init { System.loadLibrary("mirror") }
+
+        private const val INPUT_PORT = 8892
+        private const val INPUT_DOWN: Byte = 0x01
+        private const val INPUT_MOVE: Byte = 0x02
+        private const val INPUT_UP: Byte = 0x03
+        private const val INPUT_SCROLL: Byte = 0x04
+        private const val INPUT_CMD_PORT = 8893
     }
 
     private external fun nativeStart(surface: Surface, host: String, port: Int)
@@ -38,6 +60,18 @@ class MirrorActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isConnected = false
     private var pendingDisconnect: Runnable? = null
+    private lateinit var touchSender: TouchSender
+    private lateinit var commandSender: CommandSender
+    private var activePointerId: Int = -1
+    private var inScrollMode = false
+    private var lastScrollX = 0f
+    private var lastScrollY = 0f
+    private lateinit var typingInput: EditText
+    private var previousTypedText = ""
+    private var suppressTypingWatcher = false
+    private var searchModeActive = false
+    private var keyboardOpen = false
+    private var lastBackspaceSentAtMs: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,6 +123,205 @@ class MirrorActivity : Activity() {
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
+
+        typingInput = object : EditText(this) {
+            override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): InputConnection {
+                val base = super.onCreateInputConnection(outAttrs)
+                return object : InputConnectionWrapper(base, true) {
+                    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                        // Some IMEs emit deleteSurroundingText without key events.
+                        if (beforeLength > 0 && afterLength == 0) {
+                            this@MirrorActivity.sendBackspaceDeduped()
+                        }
+                        return super.deleteSurroundingText(beforeLength, afterLength)
+                    }
+                }
+            }
+        }.apply {
+            // Keep a focused input target for IME without a modal dialog UI.
+            alpha = 0.01f
+            setTextColor(Color.TRANSPARENT)
+            setBackgroundColor(Color.TRANSPARENT)
+            maxLines = 1
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+                android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+        }
+        typingInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressTypingWatcher) return
+                val current = s?.toString() ?: ""
+                if (current.contains('\n')) {
+                    // Some keyboards emit newline text instead of IME action callbacks.
+                    val sanitized = current.replace("\n", "")
+                    suppressTypingWatcher = true
+                    typingInput.setText(sanitized)
+                    typingInput.setSelection(typingInput.text.length)
+                    suppressTypingWatcher = false
+                    previousTypedText = sanitized
+                    handleEnterPressed()
+                    return
+                }
+                val lcp = longestCommonPrefix(previousTypedText, current)
+                val deleted = previousTypedText.length - lcp
+                val inserted = current.substring(lcp)
+                repeat(deleted) { sendBackspaceDeduped() }
+                if (inserted.isNotEmpty()) {
+                    commandSender.sendText(inserted)
+                }
+                previousTypedText = current
+            }
+        })
+        typingInput.setOnEditorActionListener { _, actionId, event ->
+            val imeEnter = actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            val keyEnter = event != null && event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER
+            if (imeEnter || keyEnter) {
+                handleEnterPressed()
+                true
+            } else {
+                false
+            }
+        }
+        typingInput.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
+                handleEnterPressed()
+                true
+            } else if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DEL) {
+                // Always emit a backspace on key-down for robustness across IMEs.
+                // TextWatcher path is de-duped to avoid double deletes.
+                handleBackspacePressed()
+                false
+            } else {
+                false
+            }
+        }
+        frame.addView(typingInput, FrameLayout.LayoutParams(1, 1).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            leftMargin = 1
+            bottomMargin = 1
+        })
+
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16, 12, 16, 12)
+            setBackgroundColor(Color.argb(170, 245, 245, 245))
+            alpha = 0.94f
+            addView(Button(this@MirrorActivity).apply {
+                text = "Keyboard"
+                textSize = 13f
+                setOnClickListener {
+                    if (keyboardOpen) {
+                        hideSoftKeyboard()
+                        return@setOnClickListener
+                    }
+                    if (searchModeActive) {
+                        commandSender.send("KEY ESCAPE")
+                        searchModeActive = false
+                    }
+                    resetTypingBuffer()
+                    typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+                        android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+                    showSoftKeyboard()
+                }
+            })
+            addView(Button(this@MirrorActivity).apply {
+                text = "Search"
+                textSize = 13f
+                setOnClickListener {
+                    commandSender.send("SEARCH")
+                    searchModeActive = true
+                    resetTypingBuffer()
+                    typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or
+                        android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+                    showSoftKeyboard()
+                }
+            })
+            addView(Button(this@MirrorActivity).apply {
+                text = "Enter"
+                textSize = 13f
+                setOnClickListener { handleEnterPressed() }
+            })
+        }
+        frame.addView(controls, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            topMargin = 28
+            marginEnd = 20
+        })
+
+        touchSender = TouchSender("127.0.0.1", INPUT_PORT)
+        touchSender.start()
+        commandSender = CommandSender("127.0.0.1", INPUT_CMD_PORT)
+        commandSender.start()
+
+        surfaceView.setOnTouchListener { v, event ->
+            val width = v.width.toFloat().coerceAtLeast(1f)
+            val height = v.height.toFloat().coerceAtLeast(1f)
+
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    activePointerId = event.getPointerId(0)
+                    inScrollMode = false
+                    sendTouchPacket(INPUT_DOWN, event.x / width, event.y / height, pointerId = activePointerId)
+                }
+
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (event.pointerCount >= 2) {
+                        val x = (event.getX(0) + event.getX(1)) / 2f
+                        val y = (event.getY(0) + event.getY(1)) / 2f
+                        if (!inScrollMode) {
+                            inScrollMode = true
+                            // End drag before switching into scroll mode.
+                            if (activePointerId != -1) {
+                                val idx = event.findPointerIndex(activePointerId)
+                                if (idx >= 0) {
+                                    sendTouchPacket(
+                                        INPUT_UP,
+                                        event.getX(idx) / width,
+                                        event.getY(idx) / height,
+                                        pointerId = activePointerId
+                                    )
+                                }
+                                activePointerId = -1
+                            }
+                            lastScrollX = x
+                            lastScrollY = y
+                        } else {
+                            val dx = (x - lastScrollX) / width
+                            val dy = (y - lastScrollY) / height
+                            sendTouchPacket(INPUT_SCROLL, x / width, y / height, dx = dx, dy = dy)
+                            lastScrollX = x
+                            lastScrollY = y
+                        }
+                    } else if (!inScrollMode && activePointerId != -1) {
+                        val idx = event.findPointerIndex(activePointerId)
+                        if (idx >= 0) {
+                            sendTouchPacket(
+                                INPUT_MOVE,
+                                event.getX(idx) / width,
+                                event.getY(idx) / height,
+                                pointerId = activePointerId
+                            )
+                        }
+                    }
+                }
+
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    if (!inScrollMode && activePointerId != -1) {
+                        sendTouchPacket(INPUT_UP, event.x / width, event.y / height, pointerId = activePointerId)
+                    }
+                    activePointerId = -1
+                    inScrollMode = false
+                }
+            }
+            true
+        }
 
         setContentView(frame)
 
@@ -206,6 +439,191 @@ class MirrorActivity : Activity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             )
+        }
+    }
+
+    override fun onDestroy() {
+        touchSender.stop()
+        commandSender.stop()
+        super.onDestroy()
+    }
+
+    private fun showSoftKeyboard() {
+        typingInput.requestFocus()
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(typingInput, InputMethodManager.SHOW_IMPLICIT)
+        keyboardOpen = true
+    }
+
+    private fun hideSoftKeyboard() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(typingInput.windowToken, 0)
+        typingInput.clearFocus()
+        keyboardOpen = false
+    }
+
+    private fun handleEnterPressed() {
+        commandSender.send("KEY ENTER")
+        hideSoftKeyboard()
+        resetTypingBuffer()
+        searchModeActive = false
+        typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
+            android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+    }
+
+    private fun handleBackspacePressed() {
+        sendBackspaceDeduped()
+    }
+
+    private fun sendBackspaceDeduped() {
+        val now = SystemClock.elapsedRealtime()
+        // IMEs may emit multiple delete signals for one keypress (key + surroundingText).
+        if (now - lastBackspaceSentAtMs < 28) return
+        commandSender.send("KEY BACKSPACE")
+        lastBackspaceSentAtMs = now
+    }
+
+    private fun resetTypingBuffer() {
+        suppressTypingWatcher = true
+        typingInput.setText("")
+        typingInput.setSelection(typingInput.text.length)
+        previousTypedText = ""
+        suppressTypingWatcher = false
+    }
+
+    private fun longestCommonPrefix(a: String, b: String): Int {
+        val n = minOf(a.length, b.length)
+        var i = 0
+        while (i < n && a[i] == b[i]) i++
+        return i
+    }
+
+    private fun sendTouchPacket(type: Byte, xNorm: Float, yNorm: Float, dx: Float = 0f, dy: Float = 0f, pointerId: Int = 0) {
+        val packet = ByteBuffer.allocate(23).order(ByteOrder.LITTLE_ENDIAN)
+            .put(0xDA.toByte())
+            .put(0x70.toByte())
+            .put(type)
+            .putFloat(xNorm.coerceIn(0f, 1f))
+            .putFloat(yNorm.coerceIn(0f, 1f))
+            .putFloat(dx)
+            .putFloat(dy)
+            .putInt(pointerId)
+            .array()
+        touchSender.send(packet)
+    }
+
+    private class TouchSender(private val host: String, private val port: Int) {
+        private val queue = LinkedBlockingQueue<ByteArray>()
+        @Volatile private var running = true
+        private var socket: Socket? = null
+        private var out: BufferedOutputStream? = null
+        private val worker = Thread({ runLoop() }, "DaylightTouchSender")
+
+        fun start() {
+            worker.start()
+        }
+
+        fun stop() {
+            running = false
+            worker.interrupt()
+            closeSocket()
+        }
+
+        fun send(packet: ByteArray) {
+            if (running) queue.offer(packet)
+        }
+
+        private fun runLoop() {
+            while (running) {
+                try {
+                    ensureConnected()
+                    val packet = queue.poll(1, TimeUnit.SECONDS) ?: continue
+                    out?.write(packet)
+                    out?.flush()
+                } catch (_: Exception) {
+                    closeSocket()
+                    try {
+                        Thread.sleep(500)
+                    } catch (_: InterruptedException) {
+                        // Stop path.
+                    }
+                }
+            }
+            closeSocket()
+        }
+
+        private fun ensureConnected() {
+            if (socket?.isConnected == true && socket?.isClosed == false && out != null) return
+            closeSocket()
+            socket = Socket(host, port).apply { tcpNoDelay = true }
+            out = BufferedOutputStream(socket!!.getOutputStream())
+        }
+
+        private fun closeSocket() {
+            try { out?.close() } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
+            out = null
+            socket = null
+        }
+    }
+
+    private class CommandSender(private val host: String, private val port: Int) {
+        private val queue = LinkedBlockingQueue<String>()
+        @Volatile private var running = true
+        private var socket: Socket? = null
+        private var out: BufferedOutputStream? = null
+        private val worker = Thread({ runLoop() }, "DaylightCommandSender")
+
+        fun start() {
+            worker.start()
+        }
+
+        fun stop() {
+            running = false
+            worker.interrupt()
+            closeSocket()
+        }
+
+        fun send(command: String) {
+            if (running) queue.offer(command)
+        }
+
+        fun sendText(text: String) {
+            val b64 = java.util.Base64.getEncoder().encodeToString(text.toByteArray(Charsets.UTF_8))
+            send("TEXT $b64")
+        }
+
+        private fun runLoop() {
+            while (running) {
+                try {
+                    ensureConnected()
+                    val command = queue.poll(1, TimeUnit.SECONDS) ?: continue
+                    out?.write((command + "\n").toByteArray(Charsets.UTF_8))
+                    out?.flush()
+                } catch (_: Exception) {
+                    closeSocket()
+                    try {
+                        Thread.sleep(500)
+                    } catch (_: InterruptedException) {
+                        // Stop path.
+                    }
+                }
+            }
+            closeSocket()
+        }
+
+        private fun ensureConnected() {
+            if (socket?.isConnected == true && socket?.isClosed == false && out != null) return
+            closeSocket()
+            socket = Socket(host, port).apply { tcpNoDelay = true }
+            out = BufferedOutputStream(socket!!.getOutputStream())
+        }
+
+        private fun closeSocket() {
+            try { out?.close() } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
+            out = null
+            socket = null
         }
     }
 }
