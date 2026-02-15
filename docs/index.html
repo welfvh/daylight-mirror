@@ -85,6 +85,20 @@
       margin-bottom: 8px;
     }
 
+    /* ── Top Banner ──────────────────────────────────────── */
+    .top-banner {
+      background: var(--accent-dim);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 0;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .top-banner a { color: var(--accent); font-weight: 600; }
+
+    .top-banner strong { color: var(--accent); }
+
     /* ── Theme Toggle ────────────────────────────────────── */
     .theme-toggle {
       position: fixed;
@@ -579,6 +593,10 @@
 </head>
 <body>
 
+  <div class="top-banner">
+    Don't have a DC-1 yet? Save $50 with code <strong>MIRROR</strong> at <a href="https://daylightcomputer.com/dc1">daylightcomputer.com</a>
+  </div>
+
   <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark mode">
     <span class="theme-icon">☀</span>
   </button>
@@ -589,8 +607,12 @@
   <section class="hero">
     <div class="content">
       <h1 class="hero-title">Daylight Mirror</h1>
-      <p class="hero-subtitle">Turn your Daylight DC-1 into a real-time external display for your Mac. Vibecoded in a single 6-hour session, now continuously improved by a growing community.</p>
-      <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06" class="hero-cta">Download — $15+</a>
+      <p class="hero-subtitle">Turn your Daylight DC-1 into an external display for your Mac.</p>
+
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+        <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06" class="hero-cta">Download — $15 suggested</a>
+        <span style="color: var(--muted); font-size: 12px;">Pay what you want ($5+) · or <code style="color: var(--accent); font-size: 11px; background: var(--accent-dim); padding: 1px 5px; border-radius: 3px;">brew install welfvh/tap/daylight-mirror</code></span>
+      </div>
       <img src="images/nighttime-coding.jpg" alt="Daylight DC-1 mirroring a MacBook at night — amber glow, Claude Code on screen" class="hero-image">
     </div>
   </section>
@@ -721,11 +743,11 @@
       <div class="section-label">Get Started</div>
       <h2>Download Daylight Mirror</h2>
       <p style="color: var(--muted); max-width: 480px; margin: 8px auto 0;">
-        macOS 14+. Pay what you want (from $5), or install via Homebrew.
+        macOS 14+. $15 suggested, pay what you want ($5+). Or just brew install it.
       </p>
 
       <div class="download-actions">
-        <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06" class="hero-cta">Download — $15+</a>
+        <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06" class="hero-cta">Download — $15 suggested</a>
 
         <div class="brew-box">
           <code><span class="prompt">$</span> brew install --cask welfvh/tap/daylight-mirror</code>
@@ -890,7 +912,7 @@
        ════════════════════════════════════════════════════════ -->
   <footer>
     <div class="content">
-      <p class="referral">Don't have a Daylight DC-1? Use code <strong>WELF</strong> at checkout to save $50 on <a href="https://daylightcomputer.com/dc1">daylightcomputer.com</a>.</p>
+      <p class="referral">Don't have a DC-1? Use code <strong>MIRROR</strong> at <a href="https://daylightcomputer.com/dc1">daylightcomputer.com</a> to save $50.</p>
       <div class="footer-links">
         <a href="https://github.com/welfvh/daylight-mirror">GitHub</a>
         <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06">Buy</a>
