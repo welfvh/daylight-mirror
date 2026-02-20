@@ -28,10 +28,16 @@ class TCPServer {
     var onLatencyStats: ((LatencyStats) -> Void)?
     private(set) var latencyStats: LatencyStats?
     var frameWidth: UInt16 = 1024 {
-        didSet { lock.lock(); lastKeyframeData = nil; lock.unlock() }
+        didSet {
+            lock.lock(); lastKeyframeData = nil; lock.unlock()
+            if oldValue != frameWidth { broadcastResolution() }
+        }
     }
     var frameHeight: UInt16 = 768 {
-        didSet { lock.lock(); lastKeyframeData = nil; lock.unlock() }
+        didSet {
+            lock.lock(); lastKeyframeData = nil; lock.unlock()
+            if oldValue != frameHeight { broadcastResolution() }
+        }
     }
 
     private var sendTimestamps: [UInt32: Double] = [:]
@@ -243,6 +249,16 @@ class TCPServer {
 
         for conn in conns {
             conn.send(content: packet, completion: .contentProcessed { _ in })
+        }
+    }
+
+    /// Broadcast resolution to all connected clients (called when frameWidth/frameHeight change)
+    func broadcastResolution() {
+        lock.lock()
+        let conns = connections
+        lock.unlock()
+        for conn in conns {
+            sendResolution(to: conn)
         }
     }
 
