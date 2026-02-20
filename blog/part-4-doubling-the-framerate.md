@@ -277,7 +277,7 @@ The code is in [PR #29](https://github.com/welfvh/daylight-mirror/pull/29). The 
 
 ---
 
-*The code is at [github.com/welfvh/daylight-mirror](https://github.com/welfvh/daylight-mirror). The Daylight DC-1 is made by [Daylight Computer](https://daylightcomputer.com). Use code **WELF** at checkout to save $50 on yours.*
+*The code is at [github.com/welfvh/daylight-mirror](https://github.com/welfvh/daylight-mirror). The Daylight DC-1 is made by [Daylight Computer](https://daylightcomputer.com). Use code **WELF** at [buy.daylightcomputer.com/WELF](https://buy.daylightcomputer.com/WELF).*
 
 ---
 

@@ -158,7 +158,7 @@ The blog series tells the full story:
 
 ## Get a Daylight DC-1
 
-Don't have one yet? Use code **WELF** at checkout to save $50 on your [Daylight DC-1](https://daylightcomputer.com/dc1).
+Don't have one yet? Use code **WELF** at [buy.daylightcomputer.com/WELF](https://buy.daylightcomputer.com/WELF).
 
 ## Support
 
