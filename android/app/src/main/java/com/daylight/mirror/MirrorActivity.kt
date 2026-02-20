@@ -27,6 +27,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ImageView
 import java.io.BufferedOutputStream
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -68,6 +69,9 @@ class MirrorActivity : Activity() {
     private var suppressTypingWatcher = false
     private var searchModeActive = false
     private var keyboardOpen = false
+    private lateinit var controlsPanel: LinearLayout
+    private lateinit var controlsLight: ImageView
+    private val controlsAutoHide = Runnable { hideControlsPanel() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -181,16 +185,18 @@ class MirrorActivity : Activity() {
             bottomMargin = 1
         })
 
-        val controls = LinearLayout(this).apply {
+        controlsPanel = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(16, 12, 16, 12)
             setBackgroundColor(Color.argb(170, 245, 245, 245))
-            alpha = 0.94f
+            alpha = 0f
+            visibility = View.GONE
             addView(Button(this@MirrorActivity).apply {
                 text = "Keyboard"
                 textSize = 13f
                 setOnClickListener {
+                    scheduleControlsAutoHide()
                     if (keyboardOpen) {
                         hideSoftKeyboard()
                         return@setOnClickListener
@@ -209,6 +215,7 @@ class MirrorActivity : Activity() {
                 text = "Search"
                 textSize = 13f
                 setOnClickListener {
+                    scheduleControlsAutoHide()
                     commandSender.send("SEARCH")
                     searchModeActive = true
                     resetTypingBuffer()
@@ -220,16 +227,38 @@ class MirrorActivity : Activity() {
             addView(Button(this@MirrorActivity).apply {
                 text = "Enter"
                 textSize = 13f
-                setOnClickListener { handleEnterPressed() }
+                setOnClickListener {
+                    scheduleControlsAutoHide()
+                    handleEnterPressed()
+                }
             })
         }
-        frame.addView(controls, FrameLayout.LayoutParams(
+        frame.addView(controlsPanel, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.TOP or Gravity.END
             topMargin = 28
             marginEnd = 20
+        })
+
+        controlsLight = ImageView(this).apply {
+            setImageResource(android.R.drawable.presence_invisible)
+            alpha = 0.45f
+            setColorFilter(Color.argb(210, 220, 220, 220))
+        }
+        val hotspot = FrameLayout(this).apply {
+            isClickable = true
+            isFocusable = false
+            addView(controlsLight, FrameLayout.LayoutParams(24, 24).apply {
+                gravity = Gravity.CENTER
+            })
+            setOnClickListener { toggleControlsPanel() }
+        }
+        frame.addView(hotspot, FrameLayout.LayoutParams(72, 72).apply {
+            gravity = Gravity.TOP or Gravity.END
+            topMargin = 16
+            marginEnd = 12
         })
 
         touchSender = TouchSender("127.0.0.1", INPUT_PORT)
@@ -420,16 +449,19 @@ class MirrorActivity : Activity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(controlsAutoHide)
         touchSender.stop()
         commandSender.stop()
         super.onDestroy()
     }
 
     private fun showSoftKeyboard() {
+        showControlsPanel()
         typingInput.requestFocus()
         val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
         imm.showSoftInput(typingInput, InputMethodManager.SHOW_IMPLICIT)
         keyboardOpen = true
+        scheduleControlsAutoHide()
     }
 
     private fun hideSoftKeyboard() {
@@ -446,6 +478,35 @@ class MirrorActivity : Activity() {
         searchModeActive = false
         typingInput.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE or
             android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
+    }
+
+    private fun toggleControlsPanel() {
+        if (controlsPanel.visibility == View.VISIBLE) {
+            hideControlsPanel()
+        } else {
+            showControlsPanel()
+            scheduleControlsAutoHide()
+        }
+    }
+
+    private fun showControlsPanel() {
+        handler.removeCallbacks(controlsAutoHide)
+        controlsPanel.visibility = View.VISIBLE
+        controlsPanel.animate().alpha(0.94f).setDuration(150).start()
+        controlsLight.animate().alpha(0.95f).setDuration(120).start()
+    }
+
+    private fun hideControlsPanel() {
+        handler.removeCallbacks(controlsAutoHide)
+        controlsPanel.animate().alpha(0f).setDuration(180).withEndAction {
+            controlsPanel.visibility = View.GONE
+        }.start()
+        controlsLight.animate().alpha(0.45f).setDuration(150).start()
+    }
+
+    private fun scheduleControlsAutoHide() {
+        handler.removeCallbacks(controlsAutoHide)
+        handler.postDelayed(controlsAutoHide, 5000)
     }
 
     private fun resetTypingBuffer() {

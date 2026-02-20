@@ -14,7 +14,7 @@
         <activity
             android:name=".MirrorActivity"
             android:exported="true"
-            android:screenOrientation="landscape"
+            android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.DaylightMirror">
             <intent-filter>
