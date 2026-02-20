@@ -26,12 +26,24 @@ class TCPServer {
     var lastKeyframeData: Data?
     var onClientCountChanged: ((Int) -> Void)?
     var onLatencyStats: ((LatencyStats) -> Void)?
+    private(set) var latencyStats: LatencyStats?
     var frameWidth: UInt16 = 1024 {
-        didSet { lock.lock(); lastKeyframeData = nil; lock.unlock() }
+        didSet {
+            lock.lock(); lastKeyframeData = nil; lock.unlock()
+            if oldValue != frameWidth { broadcastResolution() }
+        }
     }
     var frameHeight: UInt16 = 768 {
-        didSet { lock.lock(); lastKeyframeData = nil; lock.unlock() }
+        didSet {
+            lock.lock(); lastKeyframeData = nil; lock.unlock()
+            if oldValue != frameHeight { broadcastResolution() }
+        }
     }
+
+    // Last-sent display state — re-sent to new clients on connect so
+    // brightness/warmth don't reset to defaults after a reconnect.
+    private var lastBrightness: UInt8 = 128
+    private var lastWarmth: UInt8 = 128
 
     private var sendTimestamps: [UInt32: Double] = [:]
     private let rttLock = NSLock()
@@ -39,6 +51,15 @@ class TCPServer {
     private let rttWindowSize = 150
     private var totalAcks: Int = 0
     private var lastAckStatsTime: Double = CACurrentMediaTime()
+    private var _inflightFrames: Int = 0
+
+    /// Number of frames sent but not yet ACK'd by Android. Thread-safe (reads rttLock).
+    var inflightFrames: Int {
+        rttLock.lock()
+        let val = _inflightFrames
+        rttLock.unlock()
+        return val
+    }
 
     init(port: UInt16) throws {
         let params = NWParameters.tcp
@@ -60,16 +81,20 @@ class TCPServer {
                 switch state {
                 case .ready:
                     print("[TCP] Client connected")
-                    // Add to connections and notify only when truly ready
                     self.lock.lock()
                     self.connections.append(conn)
                     let count = self.connections.count
                     let cachedKeyframe = self.lastKeyframeData
                     self.lock.unlock()
+                    self.rttLock.lock()
+                    self._inflightFrames = 0
+                    self.sendTimestamps.removeAll()
+                    self.rttLock.unlock()
                     self.onClientCountChanged?(count)
 
-                    // Tell client our frame dimensions before sending any frames
+                    // Tell client our frame dimensions and display state before sending frames
                     self.sendResolution(to: conn)
+                    self.sendDisplayState(to: conn)
 
                     if let kf = cachedKeyframe {
                         conn.send(content: kf, completion: .contentProcessed { _ in })
@@ -145,6 +170,8 @@ class TCPServer {
             guard let sendTime = sendTimestamps.removeValue(forKey: seq) else {
                 continue
             }
+            _inflightFrames -= 1
+            if _inflightFrames < 0 { _inflightFrames = 0 }
             let rtt = (now - sendTime) * 1000.0
             rttSamples.append(rtt)
             if rttSamples.count > rttWindowSize {
@@ -174,6 +201,7 @@ class TCPServer {
                              stats.rttMs, stats.rttAvgMs, stats.rttP95Ms, stats.rttMinMs, stats.rttMaxMs, stats.acksReceived))
             }
 
+            latencyStats = stats
             onLatencyStats?(stats)
         }
     }
@@ -199,10 +227,14 @@ class TCPServer {
 
         rttLock.lock()
         sendTimestamps[sequenceNumber] = sendTime
+        _inflightFrames += 1
         // Evict old entries to prevent unbounded growth
         if sendTimestamps.count > 300 {
+            let evicted = sendTimestamps.count
             let cutoff = sequenceNumber &- 300
             sendTimestamps = sendTimestamps.filter { $0.key > cutoff }
+            _inflightFrames -= (evicted - sendTimestamps.count)
+            if _inflightFrames < 0 { _inflightFrames = 0 }
         }
         rttLock.unlock()
 
@@ -212,6 +244,10 @@ class TCPServer {
     }
 
     func sendCommand(_ cmd: UInt8, value: UInt8) {
+        // Track state so we can re-send on client reconnect
+        if cmd == CMD_BRIGHTNESS { lastBrightness = value }
+        if cmd == CMD_WARMTH { lastWarmth = value }
+
         var packet = Data(capacity: 4)
         packet.append(contentsOf: MAGIC_CMD)
         packet.append(cmd)
@@ -224,6 +260,27 @@ class TCPServer {
         for conn in conns {
             conn.send(content: packet, completion: .contentProcessed { _ in })
         }
+    }
+
+    /// Broadcast resolution to all connected clients (called when frameWidth/frameHeight change)
+    func broadcastResolution() {
+        lock.lock()
+        let conns = connections
+        lock.unlock()
+        for conn in conns {
+            sendResolution(to: conn)
+        }
+    }
+
+    /// Re-send current brightness/warmth to a specific client on (re)connect
+    /// so the Daylight doesn't revert to defaults.
+    func sendDisplayState(to conn: NWConnection) {
+        var bPkt = Data(capacity: 4)
+        bPkt.append(contentsOf: MAGIC_CMD)
+        bPkt.append(CMD_BRIGHTNESS)
+        bPkt.append(lastBrightness)
+        conn.send(content: bPkt, completion: .contentProcessed { _ in })
+        print("[TCP] Sent brightness: \(self.lastBrightness)")
     }
 
     /// Send resolution command to a specific client: [DA 7F] [04] [w:2 LE] [h:2 LE]

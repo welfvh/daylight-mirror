@@ -1,13 +1,15 @@
 // ScreenCapture.swift — CPU-only screen capture with vImage SIMD + LZ4 delta.
 //
-// Captures the virtual display via SCStream, converts BGRA to greyscale using
-// vImage SIMD, optionally sharpens with Laplacian convolution, applies contrast
-// LUT, then LZ4 compresses (keyframe or XOR delta). Zero GPU usage.
+// Captures the virtual display via CGDisplayStream (loaded at runtime via dlsym
+// to bypass macOS 15 SDK deprecation), converts BGRA to greyscale using vImage
+// SIMD, optionally sharpens with Laplacian convolution, applies contrast LUT,
+// then LZ4 compresses (keyframe or XOR delta). Zero GPU usage.
 
 import Foundation
-import ScreenCaptureKit
+import Darwin
+import IOSurface
 import CoreImage
-import CoreMedia
+import QuartzCore
 import Accelerate
 import CLZ4
 
@@ -27,14 +29,34 @@ enum ScreenCaptureError: LocalizedError {
     }
 }
 
+// MARK: - CGDisplayStream dlsym types
+
+// CGDisplayStream C functions are deprecated in macOS 15 SDK but still exist at
+// runtime. We load them via dlsym to avoid compile-time deprecation errors.
+private typealias CGDisplayStreamCreateFn = @convention(c) (
+    UInt32, Int, Int, Int32, CFDictionary?, DispatchQueue,
+    @escaping @convention(block) (Int32, UInt64, IOSurfaceRef?, OpaquePointer?) -> Void
+) -> OpaquePointer?
+private typealias CGDisplayStreamStartFn = @convention(c) (OpaquePointer) -> Int32
+private typealias CGDisplayStreamStopFn = @convention(c) (OpaquePointer) -> Int32
+
+func adaptiveBackpressureThreshold(rttMs: Double) -> Int {
+    max(2, min(6, Int(120.0 / max(rttMs, 1.0))))
+}
+
+let TRIVIAL_DELTA_THRESHOLD = 512
+
 // MARK: - Screen Capture
 
-class ScreenCapture: NSObject, SCStreamOutput {
+class ScreenCapture: NSObject {
     let tcpServer: TCPServer
     let wsServer: WebSocketServer
     let ciContext: CIContext
     let targetDisplayID: CGDirectDisplayID
-    var stream: SCStream?
+
+    // CGDisplayStream runtime handles
+    private var cgHandle: UnsafeMutableRawPointer?       // dlopen handle
+    private var displayStream: OpaquePointer?            // retained stream ref
 
     var currentGray: UnsafeMutablePointer<UInt8>?
     var previousGray: UnsafeMutablePointer<UInt8>?
@@ -51,19 +73,21 @@ class ScreenCapture: NSObject, SCStreamOutput {
 
     var frameCount: Int = 0
     var frameSequence: UInt32 = 0
+    var skippedFrames: Int = 0
+    var forceNextKeyframe: Bool = false
     var lastStatTime: Date = Date()
     var convertTimeSum: Double = 0
     var compressTimeSum: Double = 0
     var statFrames: Int = 0
     var lastCompressedSize: Int = 0
 
-    // Jitter tracking: measures interval variance between SCStream callbacks
+    // Jitter tracking: measures interval variance between callbacks
     var lastCallbackTime: Double = 0
     var jitterSamples: [Double] = []
     let jitterWindowSize = 150
 
     /// Callback: (fps, bandwidthMB, frameSizeKB, totalFrames, greyMs, compressMs, jitterMs)
-    var onStats: ((Double, Double, Int, Int, Double, Double, Double) -> Void)?
+    var onStats: ((Double, Double, Int, Int, Double, Double, Double, Int) -> Void)?
 
     let expectedWidth: Int
     let expectedHeight: Int
@@ -79,31 +103,11 @@ class ScreenCapture: NSObject, SCStreamOutput {
     }
 
     func start() async throws {
-        // Pre-check screen recording permission to avoid opaque SCStream crashes
+        // Pre-check screen recording permission
         guard CGPreflightScreenCaptureAccess() else {
             throw ScreenCaptureError.permissionDenied
         }
 
-        let content: SCShareableContent
-        do {
-            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        } catch {
-            throw ScreenCaptureError.contentEnumerationFailed(error)
-        }
-
-        guard let display = content.displays.first(where: {
-            $0.displayID == targetDisplayID
-        }) ?? content.displays.first(where: {
-            // Match by pixel OR logical dimensions (HiDPI reports logical size)
-            ($0.width == expectedWidth && $0.height == expectedHeight) ||
-            ($0.width == expectedWidth / 2 && $0.height == expectedHeight / 2)
-        }) ?? content.displays.first else {
-            print("No display found!")
-            return
-        }
-
-        // Use expected (pixel) dimensions, not display.width/height which are logical
-        // points. For HiDPI, display.width = 800 but we need 1600 actual pixels.
         frameWidth = expectedWidth
         frameHeight = expectedHeight
         pixelCount = frameWidth * frameHeight
@@ -116,31 +120,88 @@ class ScreenCapture: NSObject, SCStreamOutput {
         compressedBuffer = .allocate(capacity: Int(maxCompressed))
         previousGray!.initialize(repeating: 0, count: pixelCount)
 
-        print("Capturing display: \(expectedWidth)x\(expectedHeight) pixels (logical: \(display.width)x\(display.height), ID: \(display.displayID))")
+        print("Capturing display: \(expectedWidth)x\(expectedHeight) pixels (ID: \(targetDisplayID))")
 
-        let config = SCStreamConfiguration()
-        config.width = frameWidth
-        config.height = frameHeight
-        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(TARGET_FPS))
-        config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.queueDepth = 3
-        config.showsCursor = true
+        // Load CGDisplayStream functions via dlsym
+        guard let cg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY) else {
+            throw ScreenCaptureError.contentEnumerationFailed(
+                NSError(domain: "ScreenCapture", code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "Failed to dlopen CoreGraphics"]))
+        }
+        cgHandle = cg
 
-        let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-        stream = SCStream(filter: filter, configuration: config, delegate: nil)
+        guard let createSym = dlsym(cg, "CGDisplayStreamCreateWithDispatchQueue"),
+              let startSym = dlsym(cg, "CGDisplayStreamStart"),
+              let stopSym = dlsym(cg, "CGDisplayStreamStop") else {
+            throw ScreenCaptureError.contentEnumerationFailed(
+                NSError(domain: "ScreenCapture", code: -2,
+                        userInfo: [NSLocalizedDescriptionKey: "Failed to resolve CGDisplayStream symbols"]))
+        }
+        // Suppress unused variable warning — stopSym is resolved here to fail fast,
+        // but the actual stop function is loaded again in stop() for lifetime safety.
+        _ = stopSym
+
+        let createFn = unsafeBitCast(createSym, to: CGDisplayStreamCreateFn.self)
+        let startFn = unsafeBitCast(startSym, to: CGDisplayStreamStartFn.self)
+
+        // CGDisplayStream configuration
+        let properties: NSDictionary = [
+            "kCGDisplayStreamMinimumFrameTime": NSNumber(value: 1.0 / Double(TARGET_FPS)),
+            "kCGDisplayStreamShowCursor": kCFBooleanTrue as Any
+        ]
 
         let captureQueue = DispatchQueue(label: "capture", qos: .userInteractive)
-        try stream!.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
-        try await stream!.startCapture()
+        let pixelFormat: Int32 = 1111970369  // kCVPixelFormatType_32BGRA (0x42475241)
+
+        // Create the display stream
+        guard let stream = createFn(
+            targetDisplayID,
+            frameWidth,
+            frameHeight,
+            pixelFormat,
+            properties as CFDictionary,
+            captureQueue,
+            { [weak self] (status: Int32, _: UInt64, surface: IOSurfaceRef?, _: OpaquePointer?) in
+                self?.handleFrame(status: status, surface: surface)
+            }
+        ) else {
+            throw ScreenCaptureError.contentEnumerationFailed(
+                NSError(domain: "ScreenCapture", code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamCreateWithDispatchQueue returned nil"]))
+        }
+
+        // Retain the stream reference — without this it gets deallocated
+        displayStream = stream
+        let cfStream = Unmanaged<CFTypeRef>.fromOpaque(UnsafeRawPointer(stream))
+        _ = cfStream.retain()
+
+        // Start capture
+        let result = startFn(stream)
+        guard result == 0 else {
+            throw ScreenCaptureError.contentEnumerationFailed(
+                NSError(domain: "ScreenCapture", code: Int(result),
+                        userInfo: [NSLocalizedDescriptionKey: "CGDisplayStreamStart failed with code \(result)"]))
+        }
 
         lastStatTime = Date()
-        print("Capture started at \(TARGET_FPS)fps -- vImage + LZ4 delta (zero GPU)")
+        print("Capture started at \(TARGET_FPS)fps -- CGDisplayStream + vImage + LZ4 delta (zero GPU)")
     }
 
     func stop() async {
-        if let stream = stream {
-            try? await stream.stopCapture()
-            self.stream = nil
+        if let stream = displayStream {
+            // Load stop function
+            if let cg = cgHandle, let stopSym = dlsym(cg, "CGDisplayStreamStop") {
+                let stopFn = unsafeBitCast(stopSym, to: CGDisplayStreamStopFn.self)
+                _ = stopFn(stream)
+            }
+            // Release the retained CFTypeRef
+            let cfStream = Unmanaged<CFTypeRef>.fromOpaque(UnsafeRawPointer(stream))
+            cfStream.release()
+            displayStream = nil
+        }
+        if let cg = cgHandle {
+            dlclose(cg)
+            cgHandle = nil
         }
         currentGray?.deallocate(); currentGray = nil
         previousGray?.deallocate(); previousGray = nil
@@ -149,10 +210,12 @@ class ScreenCapture: NSObject, SCStreamOutput {
         compressedBuffer?.deallocate(); compressedBuffer = nil
     }
 
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-                of type: SCStreamOutputType) {
-        guard type == .screen, sampleBuffer.isValid,
-              let pixelBuffer = sampleBuffer.imageBuffer else { return }
+    // MARK: - Frame callback
+
+    private func handleFrame(status: Int32, surface: IOSurfaceRef?) {
+        // Status codes:
+        // 0 = FrameComplete, 1 = FrameIdle, 2 = FrameBlank, 3 = Stopped
+        guard status == 0, let surface = surface else { return }
 
         let t0 = CACurrentMediaTime()
 
@@ -167,9 +230,9 @@ class ScreenCapture: NSObject, SCStreamOutput {
         }
         lastCallbackTime = t0
 
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer)!
-        let rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        IOSurfaceLock(surface, .readOnly, nil)
+        let baseAddress = IOSurfaceGetBaseAddress(surface)
+        let rowBytes = IOSurfaceGetBytesPerRow(surface)
 
         var srcBuffer = vImage_Buffer(
             data: baseAddress,
@@ -235,7 +298,27 @@ class ScreenCapture: NSObject, SCStreamOutput {
 
         let t1 = CACurrentMediaTime()
 
-        let isKeyframe = (frameCount % KEYFRAME_INTERVAL == 0)
+        // Drop frames when Android can't keep up — send only the latest
+        let inflight = tcpServer.inflightFrames
+        let isScheduledKeyframe = (frameCount % KEYFRAME_INTERVAL == 0)
+
+        let rtt = tcpServer.latencyStats?.rttAvgMs ?? 15.0
+        let adaptiveThreshold = adaptiveBackpressureThreshold(rttMs: rtt)
+        if inflight > adaptiveThreshold && !isScheduledKeyframe {
+            skippedFrames += 1
+            forceNextKeyframe = true
+            // Still swap buffers so currentGray stays fresh for next delta base
+            let temp = previousGray
+            previousGray = currentGray
+            currentGray = temp
+
+            IOSurfaceUnlock(surface, .readOnly, nil)
+            frameCount += 1
+            return
+        }
+
+        let isKeyframe = isScheduledKeyframe || forceNextKeyframe
+        if forceNextKeyframe { forceNextKeyframe = false }
         let seq = frameSequence
         frameSequence &+= 1
 
@@ -255,8 +338,14 @@ class ScreenCapture: NSObject, SCStreamOutput {
                 deltaBuffer!, compressedBuffer!, Int32(pixelCount),
                 LZ4_compressBound(Int32(pixelCount))
             )
-            let payload = Data(bytes: compressedBuffer!, count: Int(compressedSize))
-            tcpServer.broadcast(payload: payload, isKeyframe: false, sequenceNumber: seq)
+            // Skip trivial deltas — screen barely changed, Android already has the frame
+            if compressedSize < TRIVIAL_DELTA_THRESHOLD {
+                skippedFrames += 1
+                frameSequence &-= 1  // reclaim sequence number
+            } else {
+                let payload = Data(bytes: compressedBuffer!, count: Int(compressedSize))
+                tcpServer.broadcast(payload: payload, isKeyframe: false, sequenceNumber: seq)
+            }
             lastCompressedSize = Int(compressedSize)
         }
 
@@ -267,7 +356,7 @@ class ScreenCapture: NSObject, SCStreamOutput {
         let t2 = CACurrentMediaTime()
 
         if wsServer.hasClients {
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let ciImage = CIImage(ioSurface: unsafeBitCast(surface, to: IOSurface.self))
             let grayImage = ciImage.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
             if let jpegData = ciContext.jpegRepresentation(
                 of: grayImage,
@@ -278,7 +367,7 @@ class ScreenCapture: NSObject, SCStreamOutput {
             }
         }
 
-        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        IOSurfaceUnlock(surface, .readOnly, nil)
 
         frameCount += 1
         statFrames += 1
@@ -293,9 +382,9 @@ class ScreenCapture: NSObject, SCStreamOutput {
             let bw = Double(lastCompressedSize) * fps / 1024 / 1024
             let avgJitter = jitterSamples.isEmpty ? 0.0 : jitterSamples.reduce(0, +) / Double(jitterSamples.count)
 
-            print(String(format: "FPS: %.1f | gray: %.1fms | lz4+delta: %.1fms | jitter: %.1fms | frame: %dKB | ~%.1fMB/s | total: %d",
-                         fps, avgConvert, avgCompress, avgJitter, lastCompressedSize / 1024, bw, frameCount))
-            onStats?(fps, bw, lastCompressedSize / 1024, frameCount, avgConvert, avgCompress, avgJitter)
+            print(String(format: "FPS: %.1f | gray: %.1fms | lz4+delta: %.1fms | jitter: %.1fms | frame: %dKB | ~%.1fMB/s | total: %d | skipped: %d",
+                         fps, avgConvert, avgCompress, avgJitter, lastCompressedSize / 1024, bw, frameCount, skippedFrames))
+            onStats?(fps, bw, lastCompressedSize / 1024, frameCount, avgConvert, avgCompress, avgJitter, skippedFrames)
 
             statFrames = 0
             convertTimeSum = 0

@@ -498,6 +498,7 @@ func commandLatency() {
         let rttP95 = vals["rtt_p95_ms"] ?? "?"
         let clients = vals["clients"] ?? "?"
         let frames = vals["total_frames"] ?? "?"
+        let skipped = vals["skipped_frames"] ?? "0"
 
         if watch {
             print("\u{1B}[2J\u{1B}[H", terminator: "")
@@ -507,6 +508,7 @@ func commandLatency() {
         print("FPS:              \(fps)")
         print("Clients:          \(clients)")
         print("Total frames:     \(frames)")
+        print("Skipped frames:   \(skipped)")
         print("")
         print("Mac processing:")
         print("  Greyscale:      \(grey) ms")

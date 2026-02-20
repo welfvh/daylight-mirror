@@ -11,4 +11,6 @@ target_include_directories(mirror PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mirror
     android   # ANativeWindow
     log       # __android_log_print
+    EGL
+    GLESv2
 )

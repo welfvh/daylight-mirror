@@ -10,9 +10,9 @@ Your Mac renders natively at the Daylight's 4:3 resolution. What you see on the 
 
 ## Download
 
-### [Get Daylight Mirror on Gumroad](https://welfie.gumroad.com/l/daylight-mirror)
+### [Download Daylight Mirror — $15 suggested](https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06)
 
-The `.dmg` includes both the Mac menu bar app and the Android APK for your Daylight. Pay what you want (starting at $1).
+Pay what you want ($5+). The `.dmg` includes both the Mac menu bar app and the Android APK for your Daylight.
 
 After downloading, drag "Daylight Mirror" to Applications, then install the included APK on your Daylight:
 
@@ -37,7 +37,13 @@ adb install /opt/homebrew/share/daylight-mirror/DaylightMirror.apk
 
 ### GitHub Releases
 
-Grab the `.dmg` from [Releases](https://github.com/welfvh/daylight-mirror/releases). Drag "Daylight Mirror" to Applications, then install the included APK:
+Grab the latest `.dmg` directly:
+
+```
+https://github.com/welfvh/daylight-mirror/releases/latest/download/DaylightMirror.dmg
+```
+
+Or browse all versions on the [Releases](https://github.com/welfvh/daylight-mirror/releases) page. Drag "Daylight Mirror" to Applications, then install the included APK:
 
 ```bash
 adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk
@@ -152,11 +158,11 @@ The blog series tells the full story:
 
 ## Get a Daylight DC-1
 
-Don't have one yet? Use code **WELF** at checkout to save $50 on your [Daylight DC-1](https://daylightcomputer.com/dc1).
+Don't have one yet? Use code **WELF** at [buy.daylightcomputer.com/WELF](https://buy.daylightcomputer.com/WELF).
 
 ## Support
 
-If you find this useful, you can [buy me a coffee on Gumroad](https://welfie.gumroad.com/l/daylight-mirror).
+If you find this useful, you can [support the project](https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06).
 
 ## License
 

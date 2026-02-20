@@ -163,7 +163,7 @@ struct SetupView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                featureRow("bolt.fill", "30 FPS, under 10ms latency")
+                featureRow("bolt.fill", "60 FPS, under 11ms latency")
                 featureRow("eye", "Lossless greyscale — no compression artifacts")
                 featureRow("keyboard", "Shortcuts for brightness, warmth, and more")
             }
@@ -478,12 +478,15 @@ struct MirrorMenuView: View {
                 }
                 .font(.caption)
                 Spacer()
-                Button("Setup") { showSetup() }
+                Link("Feedback", destination: URL(string: "https://github.com/welfvh/daylight-mirror/issues")!)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .buttonStyle(.plain)
                 Spacer()
-                Link("GitHub", destination: URL(string: "https://github.com/welfvh/daylight-mirror")!)
+                Link("Support", destination: URL(string: "mailto:w+mirror@welf.co")!)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Link("About", destination: URL(string: "https://welf.ai/mirror")!)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -556,7 +559,7 @@ struct MirrorMenuView: View {
                 statsRow("Total frames", "\(engine.totalFrames)")
                 statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
                 statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
-                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 30.0) * 100))
+                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 60.0) * 100))
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 4)
@@ -716,6 +719,14 @@ struct MirrorMenuView: View {
         // Auto-reconnect toggle
         Toggle(isOn: $engine.autoMirrorEnabled) {
             Label("Auto-reconnect on USB", systemImage: "cable.connector")
+                .font(.caption)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+
+        // Auto-dim Mac display when Daylight is connected
+        Toggle(isOn: $engine.autoDimMac) {
+            Label("Dim Mac display", systemImage: "display")
                 .font(.caption)
         }
         .toggleStyle(.switch)

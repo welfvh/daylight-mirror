@@ -21,7 +21,7 @@ APK := android/app/build/outputs/apk/debug/app-debug.apk
 PLATFORM_TOOLS_DIR := tools/platform-tools
 ADB_BINARY := $(PLATFORM_TOOLS_DIR)/adb
 
-.PHONY: mac android install deploy run clean test fetch-adb
+.PHONY: mac android install deploy run clean test fetch-adb lab-dry lab-run lab-run-android lab-analyze lab-scenario
 
 # Build Mac menu bar app
 mac:
@@ -72,9 +72,24 @@ install: mac
 	else \
 		echo "No APK found (run 'make android' to build). Auto-install will be skipped."; \
 	fi
-	@codesign --force --deep -s - "$(APP_BUNDLE)"
+	@# Codesign with a stable identity so TCC permissions survive rebuilds.
+	@# If you have a Developer ID, set CODESIGN_IDENTITY in your env.
+	@# Otherwise we use ad-hoc (-) but PRESERVE the existing signature
+	@# when the bundle identifier hasn't changed.
+	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
+		codesign --force --deep -s "$(CODESIGN_IDENTITY)" "$(APP_BUNDLE)"; \
+		echo "Signed with identity: $(CODESIGN_IDENTITY)"; \
+	else \
+		codesign --force --deep -s - "$(APP_BUNDLE)"; \
+		echo "Signed ad-hoc (set CODESIGN_IDENTITY to preserve TCC permissions across builds)"; \
+	fi
 	@echo "Installed: $(APP_BUNDLE)"
 	@echo "Open from Spotlight or: open \"$(APP_BUNDLE)\""
+	@echo ""
+	@echo "TIP: To avoid re-granting Screen Recording after each build, run:"
+	@echo "  make install CODESIGN_IDENTITY='Apple Development: you@example.com'"
+	@echo "or create a self-signed cert named 'DaylightMirrorDev' in Keychain Access and:"
+	@echo "  make install CODESIGN_IDENTITY=DaylightMirrorDev"
 
 # Deploy APK to connected Daylight via adb
 deploy:
@@ -100,3 +115,23 @@ clean:
 	swift package clean
 	rm -rf "$(APP_BUNDLE)"
 	@echo "Cleaned"
+
+# ── Latency Lab ──────────────────────────────────────────────
+
+LAB_PLAN ?= experiments/plan.example.json
+
+lab-dry:
+	python3 scripts/latency_lab.py --plan "$(LAB_PLAN)" --dry-run
+
+lab-run:
+	python3 scripts/latency_lab.py --plan "$(LAB_PLAN)"
+
+lab-run-android:
+	python3 scripts/latency_lab.py --plan "$(LAB_PLAN)" --android
+
+lab-analyze:
+	python3 scripts/lab_analyze.py
+
+LAB_SCENARIO ?= full
+lab-scenario:
+	python3 scripts/lab_scenario.py --scenario "$(LAB_SCENARIO)"

@@ -10,9 +10,9 @@ let INPUT_PORT: UInt16 = 8892
 let INPUT_CMD_PORT: UInt16 = 8893
 let WS_PORT: UInt16 = 8890
 let HTTP_PORT: UInt16 = 8891
-let TARGET_FPS: Int = 30
+let TARGET_FPS: Int = 60  // DC-1 panel supports up to 120Hz; 60fps viable with GL shader + NEON opts
 let JPEG_QUALITY: CGFloat = 0.8
-let KEYFRAME_INTERVAL: Int = 30
+let KEYFRAME_INTERVAL: Int = 60
 
 // Image processing for e-ink/greyscale displays.
 // macOS font smoothing produces subpixel-antialiased text that looks fuzzy when
@@ -28,31 +28,33 @@ public enum DisplayResolution: String, CaseIterable, Identifiable {
     // Landscape (4:3)
     case cozy        = "800x600"    // HiDPI 2x: 800x600pt → 1600x1200px — large UI, native sharpness
     case comfortable = "1024x768"   // Larger UI, easy on the eyes
-    case balanced    = "1280x960"   // Good balance of size and sharpness
-    case sharp       = "1600x1200"  // Maximum sharpness, smaller UI (1:1 native)
+    case balanced    = "1280x960"   // Good middle ground
+    case sharp       = "1600x1200"  // Maximum sharpness, 1:1 native pixel mapping
     // Portrait (3:4)
-    case portraitCozy     = "600x800"    // HiDPI 2x: 600x800pt → 1200x1600px — large UI, native sharpness
-    case portraitBalanced = "960x1280"   // Good balance of size and sharpness
-    case portraitSharp    = "1200x1600"  // Maximum sharpness, smaller UI (1:1 native)
+    case portraitCozy        = "600x800"    // HiDPI 2x: 600x800pt → 1200x1600px — large UI, native sharpness
+    case portraitComfortable = "768x1024"   // Larger UI, easy on the eyes
+    case portraitBalanced    = "960x1280"   // Good middle ground
+    case portraitSharp       = "1200x1600"  // Maximum sharpness, 1:1 native pixel mapping
 
     public var id: String { rawValue }
-    /// Pixel dimensions captured by SCStream and sent to the Daylight.
+    /// Pixel dimensions captured and sent to the Daylight.
     public var width: UInt {
         switch self {
         case .cozy: 1600; case .comfortable: 1024; case .balanced: 1280; case .sharp: 1600
-        case .portraitCozy: 1200; case .portraitBalanced: 960; case .portraitSharp: 1200
+        case .portraitCozy: 1200; case .portraitComfortable: 768; case .portraitBalanced: 960; case .portraitSharp: 1200
         }
     }
     public var height: UInt {
         switch self {
         case .cozy: 1200; case .comfortable: 768; case .balanced: 960; case .sharp: 1200
-        case .portraitCozy: 1600; case .portraitBalanced: 1280; case .portraitSharp: 1600
+        case .portraitCozy: 1600; case .portraitComfortable: 1024; case .portraitBalanced: 1280; case .portraitSharp: 1600
         }
     }
     public var label: String {
         switch self {
         case .cozy: "Cozy"; case .comfortable: "Comfortable"; case .balanced: "Balanced"; case .sharp: "Sharp"
-        case .portraitCozy: "Portrait Cozy"; case .portraitBalanced: "Portrait Balanced"; case .portraitSharp: "Portrait Sharp"
+        case .portraitCozy: "Portrait Cozy"; case .portraitComfortable: "Portrait Comfortable"
+        case .portraitBalanced: "Portrait Balanced"; case .portraitSharp: "Portrait Sharp"
         }
     }
     /// Whether the virtual display uses HiDPI (2x) scaling.
@@ -60,7 +62,7 @@ public enum DisplayResolution: String, CaseIterable, Identifiable {
     /// Whether this is a portrait (vertical) orientation preset.
     public var isPortrait: Bool {
         switch self {
-        case .portraitCozy, .portraitBalanced, .portraitSharp: true
+        case .portraitCozy, .portraitComfortable, .portraitBalanced, .portraitSharp: true
         default: false
         }
     }

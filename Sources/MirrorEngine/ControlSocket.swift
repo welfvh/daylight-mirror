@@ -282,7 +282,8 @@ public class ControlSocket {
                 "rtt_avg_ms=\(String(format: "%.1f", engine.rttMs))",
                 "rtt_p95_ms=\(String(format: "%.1f", engine.rttP95Ms))",
                 "clients=\(engine.clientCount)",
-                "total_frames=\(engine.totalFrames)"
+                "total_frames=\(engine.totalFrames)",
+                "skipped_frames=\(engine.skippedFrames)"
             ]
             return "OK\n" + lines.joined(separator: "\n")
 
