@@ -579,9 +579,41 @@ struct MirrorMenuView: View {
                 .font(.caption)
             Spacer()
             if engine.adbConnected {
-                Label("USB", systemImage: "cable.connector")
+                Label(engine.wirelessModeEnabled ? "ADB" : "USB", systemImage: engine.wirelessModeEnabled ? "wifi" : "cable.connector")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { engine.wirelessModeEnabled || engine.wirelessConnecting },
+                set: { enabled in
+                    engine.setWirelessMode(enabled)
+                }
+            )) {
+                Label("Wireless", systemImage: engine.wirelessModeEnabled ? "wifi" : "wifi.slash")
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(engine.wirelessConnecting)
+
+            if engine.wirelessConnecting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Detecting Daylight over Wi-Fi...")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            } else if engine.wirelessModeEnabled {
+                Text(engine.adbNetworkEndpoint)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else if !engine.wirelessStatus.isEmpty {
+                Text(engine.wirelessStatus)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
             }
         }
 
@@ -817,6 +849,40 @@ struct MirrorMenuView: View {
             .pickerStyle(.menu)
             .controlSize(.small)
             .padding(.vertical, 2)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(isOn: Binding(
+                    get: { engine.wirelessModeEnabled || engine.wirelessConnecting },
+                    set: { enabled in
+                        engine.setWirelessMode(enabled)
+                    }
+                )) {
+                    Label("Wireless", systemImage: engine.wirelessModeEnabled ? "wifi" : "wifi.slash")
+                        .font(.caption)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(engine.wirelessConnecting)
+
+                if engine.wirelessConnecting {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Detecting Daylight over Wi-Fi...")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if engine.wirelessModeEnabled {
+                    Text(engine.adbNetworkEndpoint)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Tip: turn on Wireless once while USB is connected.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
 
             Divider()
 
