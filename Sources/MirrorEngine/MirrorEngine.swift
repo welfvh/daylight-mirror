@@ -18,7 +18,7 @@ public class MirrorEngine: ObservableObject {
     // RELEASE: Bump this BEFORE creating a GitHub release. Also upload both
     // DaylightMirror-vX.Y.dmg (versioned) and DaylightMirror.dmg (stable name for Gumroad link)
     // to the release. Update Homebrew cask in welfvh/homebrew-tap with new version + sha256.
-    public static let appVersion = "1.6.0"
+    public static let appVersion = "1.6.1"
 
     @Published public var status: MirrorStatus = .idle
     @Published public var fps: Double = 0
