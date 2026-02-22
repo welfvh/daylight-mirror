@@ -12,6 +12,8 @@
 import Foundation
 
 struct ADBBridge {
+    private static var selectedDeviceSerial: String?
+
     /// Resolved path to the adb binary. Prefers system adb (user-managed, up-to-date),
     /// falls back to bundled copy (for users without Homebrew/Android SDK).
     private static let resolvedADBPath: String? = {
@@ -83,13 +85,24 @@ struct ADBBridge {
     /// Create a Process configured to run adb with the given arguments.
     /// Uses the full shell environment to ensure we talk to the same adb server
     /// as the user's terminal.
-    private static func makeADBProcess(_ arguments: [String]) -> Process? {
+    private static func makeADBProcess(_ arguments: [String], useSelectedSerial: Bool = true) -> Process? {
         guard let adbPath = resolvedADBPath else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adbPath)
-        process.arguments = arguments
+        var finalArgs: [String] = []
+        if useSelectedSerial, let serial = selectedDeviceSerial, !serial.isEmpty {
+            finalArgs += ["-s", serial]
+        }
+        finalArgs += arguments
+        process.arguments = finalArgs
         process.environment = shellEnvironment
         return process
+    }
+
+    static func setSelectedDeviceSerial(_ serial: String?) {
+        let trimmed = serial?.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedDeviceSerial = (trimmed?.isEmpty == false) ? trimmed : nil
+        NSLog("[ADB] Selected device serial: %@", selectedDeviceSerial ?? "<none>")
     }
 
     static func isAvailable() -> Bool {
@@ -101,7 +114,7 @@ struct ADBBridge {
     @discardableResult
     static func ensureServerRunning() -> Bool {
         let stderr = Pipe()
-        guard let process = makeADBProcess(["start-server"]) else { return false }
+        guard let process = makeADBProcess(["start-server"], useSelectedSerial: false) else { return false }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = stderr
         do {
@@ -120,10 +133,10 @@ struct ADBBridge {
         return false
     }
 
-    static func connectedDevice() -> String? {
+    static func connectedDevice(preferredSerial: String? = nil) -> String? {
         let stdout = Pipe()
         let stderr = Pipe()
-        guard let process = makeADBProcess(["devices"]) else {
+        guard let process = makeADBProcess(["devices"], useSelectedSerial: false) else {
             NSLog("[ADB] connectedDevice: no adb binary")
             return nil
         }
@@ -142,17 +155,193 @@ struct ADBBridge {
             NSLog("[ADB] connectedDevice: exit %d — %@", process.terminationStatus, errOutput.trimmingCharacters(in: .whitespacesAndNewlines))
             return nil
         }
+        var firstDevice: String?
         for line in output.split(separator: "\n").dropFirst() {
             let parts = line.split(separator: "\t")
             if parts.count >= 2 && parts[1] == "device" {
-                return String(parts[0])
+                let serial = String(parts[0])
+                if firstDevice == nil { firstDevice = serial }
+                if let preferredSerial, serial == preferredSerial {
+                    return serial
+                }
             }
             if parts.count >= 2 {
                 NSLog("[ADB] connectedDevice: device %@ status '%@' (not ready)", String(parts[0]), String(parts[1]))
             }
         }
+        if preferredSerial == nil {
+            return firstDevice
+        }
         NSLog("[ADB] connectedDevice: no device found in output: %@", output.trimmingCharacters(in: .whitespacesAndNewlines))
         return nil
+    }
+
+    static func connectedDeviceSerials() -> [String] {
+        let stdout = Pipe()
+        let stderr = Pipe()
+        guard let process = makeADBProcess(["devices"], useSelectedSerial: false) else { return [] }
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            NSLog("[ADB] connectedDeviceSerials: failed to launch — %@", "\(error)")
+            return []
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let errOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            NSLog("[ADB] connectedDeviceSerials: exit %d — %@", process.terminationStatus, errOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+            return []
+        }
+        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        var serials: [String] = []
+        for line in output.split(separator: "\n").dropFirst() {
+            let parts = line.split(separator: "\t")
+            if parts.count >= 2 && parts[1] == "device" {
+                serials.append(String(parts[0]))
+            }
+        }
+        return serials
+    }
+
+    static func isWirelessSerial(_ serial: String) -> Bool {
+        // ADB TCP device serials are "ip:port".
+        return serial.contains(":")
+    }
+
+    @discardableResult
+    static func connectWireless(endpoint: String) -> Bool {
+        let stdout = Pipe()
+        let stderr = Pipe()
+        guard let process = makeADBProcess(["connect", endpoint], useSelectedSerial: false) else { return false }
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            NSLog("[ADB] connectWireless: failed to launch — %@", "\(error)")
+            return false
+        }
+        process.waitUntilExit()
+        let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let merged = (out + "\n" + err).lowercased()
+        let ok = process.terminationStatus == 0 &&
+            (merged.contains("connected to") || merged.contains("already connected to"))
+        if ok {
+            NSLog("[ADB] Wireless connect OK: %@", endpoint)
+        } else {
+            NSLog("[ADB] Wireless connect failed (%d): %@", process.terminationStatus, (out + err).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return ok
+    }
+
+    @discardableResult
+    static func disconnectWireless(endpoint: String) -> Bool {
+        let stdout = Pipe()
+        let stderr = Pipe()
+        guard let process = makeADBProcess(["disconnect", endpoint], useSelectedSerial: false) else { return false }
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            NSLog("[ADB] disconnectWireless: failed to launch — %@", "\(error)")
+            return false
+        }
+        process.waitUntilExit()
+        let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let ok = process.terminationStatus == 0
+        if ok {
+            NSLog("[ADB] Wireless disconnect %@ — %@", endpoint, out.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            NSLog("[ADB] Wireless disconnect failed (%d): %@", process.terminationStatus, (out + err).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return ok
+    }
+
+    @discardableResult
+    static func enableTCPIP(port: UInt16 = 5555, serial: String) -> Bool {
+        let stdout = Pipe()
+        let stderr = Pipe()
+        guard let process = makeADBProcess(["-s", serial, "tcpip", "\(port)"], useSelectedSerial: false) else { return false }
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            NSLog("[ADB] enableTCPIP: failed to launch — %@", "\(error)")
+            return false
+        }
+        process.waitUntilExit()
+        let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let ok = process.terminationStatus == 0
+        if ok {
+            NSLog("[ADB] TCP/IP enabled on %@:%d — %@", serial, port, out.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            NSLog("[ADB] enableTCPIP failed (%d): %@", process.terminationStatus, (out + err).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return ok
+    }
+
+    static func discoverWLANIPAddress(serial: String) -> String? {
+        // Prefer getprop (cheap + stable on Android).
+        let propCandidates = [
+            "dhcp.wlan0.ipaddress",
+            "dhcp.wlan1.ipaddress",
+            "wifi.interface.ip"
+        ]
+        for key in propCandidates {
+            if let val = runShell(serial: serial, command: ["getprop", key])?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               isIPv4(val) {
+                return val
+            }
+        }
+
+        // Fallback: parse `ip` output from wlan0.
+        if let ipOutput = runShell(serial: serial, command: ["ip", "-f", "inet", "addr", "show", "wlan0"]) {
+            for token in ipOutput.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "/" }) {
+                let s = String(token)
+                if isIPv4(s) { return s }
+            }
+        }
+        return nil
+    }
+
+    private static func runShell(serial: String, command: [String]) -> String? {
+        let stdout = Pipe()
+        let stderr = Pipe()
+        var args = ["-s", serial, "shell"]
+        args.append(contentsOf: command)
+        guard let process = makeADBProcess(args, useSelectedSerial: false) else { return nil }
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            NSLog("[ADB] runShell failed to launch — %@", "\(error)")
+            return nil
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let errOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            NSLog("[ADB] runShell exit %d — %@", process.terminationStatus, errOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+            return nil
+        }
+        return String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+    }
+
+    private static func isIPv4(_ s: String) -> Bool {
+        let parts = s.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        for part in parts {
+            guard let value = Int(part), value >= 0 && value <= 255 else { return false }
+        }
+        return true
     }
 
     @discardableResult
