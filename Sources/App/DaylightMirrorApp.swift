@@ -522,7 +522,7 @@ struct MirrorMenuView: View {
     var statusText: String {
         switch engine.status {
         case .idle: return "Idle"
-        case .waitingForDevice: return "Waiting for DC-1"
+        case .waitingForDevice: return "Waiting"
         case .starting: return "Starting"
         case .running: return "Running"
         case .stopping: return "Stopping"
@@ -534,114 +534,67 @@ struct MirrorMenuView: View {
 
     @State private var showDetailedStats = false
 
+    /// Whether any DC-1 device is among the active sessions.
+    private var hasDC1: Bool { engine.sessions.contains { $0.device.deviceFamily == .daylightDC1 } }
+    /// Whether any Boox Palma is among the active sessions.
+    private var hasBoox: Bool { engine.sessions.contains { $0.device.deviceFamily == .booxPalma } }
+
     @ViewBuilder
     var runningView: some View {
-        // Stats — tap to expand
-        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showDetailedStats.toggle() } }) {
-            HStack {
-                Label(String(format: "%.0f FPS", engine.fps), systemImage: "speedometer")
-                Spacer()
-                Text(String(format: "%.1f MB/s", engine.bandwidth))
-                    .foregroundStyle(.secondary)
-                Image(systemName: showDetailedStats ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
-            }
-            .font(.caption)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-
-        if showDetailedStats {
-            VStack(spacing: 4) {
-                statsRow("Resolution", "\(engine.resolution.rawValue)\(engine.resolution.isHiDPI ? " HiDPI" : "")")
-                statsRow("Frame size", "\(engine.frameSizeKB) KB")
-                statsRow("Total frames", "\(engine.totalFrames)")
-                statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
-                statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
-                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 60.0) * 100))
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
-        }
-
-        // Client status
-        HStack(spacing: 6) {
-            Circle()
-                .fill(engine.clientCount > 0 ? .green : .orange)
-                .frame(width: 6, height: 6)
-            Text(engine.clientCount > 0
-                 ? "Daylight connected"
-                 : engine.apkInstallStatus.isEmpty
-                    ? "Waiting for client..."
-                    : engine.apkInstallStatus)
-                .font(.caption)
-            Spacer()
-            if engine.adbConnected {
-                Label("USB", systemImage: "cable.connector")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        // Connected devices list
+        VStack(spacing: 6) {
+            ForEach(engine.sessions) { session in
+                deviceRow(session)
             }
         }
 
         Divider()
 
-        // Display mode toggle (mirror vs extended)
-        Picker("Mode", selection: Binding(
-            get: { engine.displayMode },
-            set: { newMode in
-                engine.displayMode = newMode
-                engine.stop()
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(0.5))
-                    await engine.start()
+        // Per-device resolution pickers (only show for connected device families)
+        if hasDC1 {
+            Picker("DC-1", selection: Binding(
+                get: { engine.resolution },
+                set: { newRes in
+                    engine.resolution = newRes
+                    restartEngine()
+                }
+            )) {
+                Section("Landscape") {
+                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
+                        Text("\(res.label) (\(res.rawValue))").tag(res)
+                    }
+                }
+                Section("Portrait") {
+                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
+                        Text("\(res.label) (\(res.rawValue))").tag(res)
+                    }
                 }
             }
-        )) {
-            ForEach(DisplayMode.allCases) { mode in
-                Text(mode.label).tag(mode)
-            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
         }
-        .pickerStyle(.segmented)
-        .controlSize(.small)
 
-        // Resolution (change triggers restart)
-        Picker("Resolution", selection: Binding(
-            get: { engine.resolution },
-            set: { newRes in
-                engine.resolution = newRes
-                engine.stop()
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(0.5))
-                    await engine.start()
+        if hasBoox {
+            Picker("Boox", selection: Binding(
+                get: { engine.booxResolution },
+                set: { newRes in
+                    engine.booxResolution = newRes
+                    restartEngine()
                 }
-            }
-        )) {
-            Section("DC-1 Landscape") {
-                ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
-                    Text("\(res.label) (\(res.rawValue))").tag(res)
-                }
-            }
-            Section("DC-1 Portrait") {
-                ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
-                    Text("\(res.label) (\(res.rawValue))").tag(res)
-                }
-            }
-            Section("Boox Palma") {
+            )) {
                 ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
                     Text("\(res.label) (\(res.rawValue))").tag(res)
                 }
             }
+            .pickerStyle(.menu)
+            .controlSize(.small)
         }
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .padding(.vertical, 2)
 
-        Divider()
+        // DC-1 display controls (brightness, warmth, backlight)
+        if hasDC1 {
+            Divider()
 
-        // Brightness slider (quadratic curve with widened low-end zone)
-        VStack(alignment: .leading, spacing: 2) {
+            // Brightness slider (quadratic curve with widened low-end zone)
             HStack {
                 Image(systemName: "sun.min")
                     .font(.caption2)
@@ -660,10 +613,8 @@ struct MirrorMenuView: View {
                 Image(systemName: "sun.max")
                     .font(.caption2)
             }
-        }
 
-        // Warmth slider
-        VStack(alignment: .leading, spacing: 2) {
+            // Warmth slider
             HStack {
                 Image(systemName: "snowflake")
                     .font(.caption2)
@@ -677,22 +628,22 @@ struct MirrorMenuView: View {
                 Image(systemName: "flame")
                     .font(.caption2)
             }
-        }
 
-        // Backlight toggle
-        Toggle(isOn: Binding(
-            get: { engine.backlightOn },
-            set: { _ in engine.toggleBacklight() }
-        )) {
-            Label("Backlight", systemImage: "lightbulb")
-                .font(.caption)
+            // Backlight toggle
+            Toggle(isOn: Binding(
+                get: { engine.backlightOn },
+                set: { _ in engine.toggleBacklight() }
+            )) {
+                Label("Backlight", systemImage: "lightbulb")
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
 
         Divider()
 
-        // Sharpening slider (0-1.5)
+        // Sharpening slider (applies to all devices)
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Image(systemName: "circle.dashed")
@@ -715,7 +666,38 @@ struct MirrorMenuView: View {
 
         Divider()
 
-        // Auto-reconnect toggle
+        // Stats — tap to expand
+        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showDetailedStats.toggle() } }) {
+            HStack {
+                Label(String(format: "%.0f FPS", engine.fps), systemImage: "speedometer")
+                Spacer()
+                Text(String(format: "%.1f MB/s", engine.bandwidth))
+                    .foregroundStyle(.secondary)
+                Image(systemName: showDetailedStats ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if showDetailedStats {
+            VStack(spacing: 4) {
+                statsRow("Frame size", "\(engine.frameSizeKB) KB")
+                statsRow("Total frames", "\(engine.totalFrames)")
+                statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
+                statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
+                statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 60.0) * 100))
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
+        }
+
+        Divider()
+
+        // Settings
         Toggle(isOn: $engine.autoMirrorEnabled) {
             Label("Auto-reconnect on USB", systemImage: "cable.connector")
                 .font(.caption)
@@ -723,7 +705,6 @@ struct MirrorMenuView: View {
         .toggleStyle(.switch)
         .controlSize(.small)
 
-        // Auto-dim Mac display when Daylight is connected
         Toggle(isOn: $engine.autoDimMac) {
             Label("Dim Mac display", systemImage: "display")
                 .font(.caption)
@@ -742,13 +723,7 @@ struct MirrorMenuView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
 
-            Button(action: {
-                engine.stop()
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(0.5))
-                    await engine.start()
-                }
-            }) {
+            Button(action: { restartEngine() }) {
                 Text("Restart")
                     .frame(maxWidth: .infinity)
             }
@@ -761,6 +736,48 @@ struct MirrorMenuView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        }
+    }
+
+    // MARK: - Device Row
+
+    @ViewBuilder
+    func deviceRow(_ session: DeviceSession) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: session.device.deviceFamily == .daylightDC1
+                  ? "display" : "iphone")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.device.deviceFamily == .daylightDC1 ? "DC-1" : "Boox Palma")
+                    .font(.caption.weight(.medium))
+                HStack(spacing: 4) {
+                    Text(session.resolution.rawValue)
+                    Text("·")
+                    Text(session.displayMode == .mirror ? "Mirror" : "Extended")
+                }
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            Circle()
+                .fill(session.clientCount > 0 ? .green : .orange)
+                .frame(width: 6, height: 6)
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Restart Helper
+
+    private func restartEngine() {
+        engine.stop()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.5))
+            await engine.start()
         }
     }
 
@@ -831,7 +848,7 @@ struct MirrorMenuView: View {
                 Circle()
                     .fill(engine.deviceDetected ? .green : .gray)
                     .frame(width: 6, height: 6)
-                Text(engine.deviceDetected ? "DC-1 detected via USB" : "No device connected")
+                Text(engine.deviceDetected ? "Device detected via USB" : "No device connected")
                     .font(.caption)
                     .foregroundStyle(engine.deviceDetected ? .primary : .secondary)
             }
@@ -839,36 +856,30 @@ struct MirrorMenuView: View {
 
             Divider()
 
-            // Display mode toggle
-            Picker("Mode", selection: $engine.displayMode) {
-                ForEach(DisplayMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-
-            // Resolution picker
-            Picker("Resolution", selection: $engine.resolution) {
-                Section("DC-1 Landscape") {
+            // DC-1 resolution
+            Picker("DC-1", selection: $engine.resolution) {
+                Section("Landscape") {
                     ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
                         Text("\(res.label) (\(res.rawValue))").tag(res)
                     }
                 }
-                Section("DC-1 Portrait") {
+                Section("Portrait") {
                     ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
-                        Text("\(res.label) (\(res.rawValue))").tag(res)
-                    }
-                }
-                Section("Boox Palma") {
-                    ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
                         Text("\(res.label) (\(res.rawValue))").tag(res)
                     }
                 }
             }
             .pickerStyle(.menu)
             .controlSize(.small)
-            .padding(.vertical, 2)
+
+            // Boox resolution
+            Picker("Boox", selection: $engine.booxResolution) {
+                ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
+                    Text("\(res.label) (\(res.rawValue))").tag(res)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
 
             Divider()
 

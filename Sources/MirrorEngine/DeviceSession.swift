@@ -11,21 +11,22 @@
 import Foundation
 import AppKit
 
-class DeviceSession {
-    let port: UInt16
-    let resolution: DisplayResolution
-    let displayMode: DisplayMode
-    let device: ConnectedDevice
+public class DeviceSession: Identifiable {
+    public var id: String { device.serial }
+    public let port: UInt16
+    public let resolution: DisplayResolution
+    public let displayMode: DisplayMode
+    public let device: ConnectedDevice
 
     private(set) var displayManager: VirtualDisplayManager?
     private(set) var tcpServer: TCPServer?
     private(set) var capture: ScreenCapture?
     private(set) var compositorPacer: CompositorPacer?
-    private(set) var adbConnected: Bool = false
+    public private(set) var adbConnected: Bool = false
 
     // Stats — pushed to MirrorEngine via callbacks
-    var clientCount: Int = 0
-    var fps: Double = 0
+    public var clientCount: Int = 0
+    public var fps: Double = 0
     var bandwidth: Double = 0
     var totalFrames: Int = 0
     var frameSizeKB: Int = 0

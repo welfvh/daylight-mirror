@@ -61,7 +61,8 @@ public class MirrorEngine: ObservableObject {
     }
 
     /// Active device sessions — one per connected Android device.
-    private(set) var sessions: [DeviceSession] = []
+    /// Published so the menu bar UI can show per-device info.
+    @Published public private(set) var sessions: [DeviceSession] = []
     private var wsServer: WebSocketServer?
     private var httpServer: HTTPServer?
     private var displayController: DisplayController?
@@ -81,7 +82,7 @@ public class MirrorEngine: ObservableObject {
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
         self.resolution = DisplayResolution(rawValue: saved) ?? .sharp
         let savedBoox = UserDefaults.standard.string(forKey: "booxResolution") ?? ""
-        self.booxResolution = DisplayResolution(rawValue: savedBoox) ?? .booxSharp
+        self.booxResolution = DisplayResolution(rawValue: savedBoox) ?? .booxCozy
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")

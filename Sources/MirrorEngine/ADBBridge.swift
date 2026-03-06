@@ -12,7 +12,8 @@
 import Foundation
 
 /// A USB-connected Android device detected by ADB.
-public struct ConnectedDevice {
+public struct ConnectedDevice: Identifiable {
+    public var id: String { serial }
     public let serial: String
     public let model: String
 
