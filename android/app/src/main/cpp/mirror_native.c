@@ -64,7 +64,7 @@ static int g_sock = -1;
 static uint32_t g_frame_w = DEFAULT_FRAME_W;
 static uint32_t g_frame_h = DEFAULT_FRAME_H;
 static uint32_t g_pixel_count = DEFAULT_FRAME_W * DEFAULT_FRAME_H;
-static uint32_t g_max_compressed = DEFAULT_FRAME_W * DEFAULT_FRAME_H + 256;
+static uint32_t g_max_compressed = DEFAULT_FRAME_W * DEFAULT_FRAME_H + (DEFAULT_FRAME_W * DEFAULT_FRAME_H / 255) + 1024;
 
 // Frame buffers (allocated once, reused — reallocated on resolution change)
 static uint8_t *g_current_frame = NULL;   // Decompressed greyscale pixels
@@ -499,7 +499,9 @@ static void publish_frame(const uint8_t *frame, uint32_t seq) {
 
 static int reallocate_buffers(uint32_t new_w, uint32_t new_h, uint8_t **decompress_buf) {
     uint32_t new_pixels = new_w * new_h;
-    uint32_t new_max_compressed = new_pixels + 256;
+    // LZ4 worst-case: input_size + input_size/255 + 16. Use generous margin
+    // to handle incompressible frames (noisy screenshots, gradients, etc.).
+    uint32_t new_max_compressed = new_pixels + (new_pixels / 255) + 1024;
 
     uint8_t *new_current = (uint8_t *)calloc(new_pixels, 1);
     uint8_t *new_compressed = (uint8_t *)malloc(new_max_compressed);
