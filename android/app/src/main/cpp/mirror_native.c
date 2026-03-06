@@ -63,6 +63,11 @@ static int g_sock = -1;
 // Dynamic frame dimensions (set by CMD_RESOLUTION before first frame)
 static uint32_t g_frame_w = DEFAULT_FRAME_W;
 static uint32_t g_frame_h = DEFAULT_FRAME_H;
+// Actual surface dimensions from surfaceChanged — the real window size after
+// any orientation change. Some devices (Boox Palma) claim to rotate but the
+// e-ink framebuffer stays portrait, so we use this to detect the truth.
+static uint32_t g_surface_w = 0;
+static uint32_t g_surface_h = 0;
 static uint32_t g_pixel_count = DEFAULT_FRAME_W * DEFAULT_FRAME_H;
 static uint32_t g_max_compressed = DEFAULT_FRAME_W * DEFAULT_FRAME_H + (DEFAULT_FRAME_W * DEFAULT_FRAME_H / 255) + 1024;
 
@@ -93,6 +98,27 @@ static GLint g_gl_uniform_texture = -1;
 static uint32_t g_gl_tex_w = 0;
 static uint32_t g_gl_tex_h = 0;
 static int g_gl_ready = 0;
+static int g_gl_rotated = 0;  // 1 = currently using rotated quad vertices
+
+// Normal quad: no rotation (frame and surface have same orientation)
+static const GLfloat k_quad_vertices[] = {
+    -1.0f, -1.0f, 0.0f, 1.0f,
+     1.0f, -1.0f, 1.0f, 1.0f,
+    -1.0f,  1.0f, 0.0f, 0.0f,
+    -1.0f,  1.0f, 0.0f, 0.0f,
+     1.0f, -1.0f, 1.0f, 1.0f,
+     1.0f,  1.0f, 1.0f, 0.0f,
+};
+// Rotated 90° CW: landscape frame on portrait surface.
+// When user holds device sideways (CCW), content appears upright.
+static const GLfloat k_quad_vertices_rot90[] = {
+    -1.0f, -1.0f, 1.0f, 1.0f,
+     1.0f, -1.0f, 1.0f, 0.0f,
+    -1.0f,  1.0f, 0.0f, 1.0f,
+    -1.0f,  1.0f, 0.0f, 1.0f,
+     1.0f, -1.0f, 1.0f, 0.0f,
+     1.0f,  1.0f, 0.0f, 0.0f,
+};
 
 static const char *k_vertex_shader_src =
     "attribute vec4 a_position;\n"
@@ -236,15 +262,6 @@ static int gl_init(ANativeWindow *window) {
         EGL_CONTEXT_CLIENT_VERSION, 2,
         EGL_NONE
     };
-    static const GLfloat quad_vertices[] = {
-        -1.0f, -1.0f, 0.0f, 1.0f,
-         1.0f, -1.0f, 1.0f, 1.0f,
-        -1.0f,  1.0f, 0.0f, 0.0f,
-        -1.0f,  1.0f, 0.0f, 0.0f,
-         1.0f, -1.0f, 1.0f, 1.0f,
-         1.0f,  1.0f, 1.0f, 0.0f,
-    };
-
     g_egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (g_egl_display == EGL_NO_DISPLAY) {
         LOGE("eglGetDisplay failed");
@@ -293,8 +310,9 @@ static int gl_init(ANativeWindow *window) {
         goto fail;
     }
     glBindBuffer(GL_ARRAY_BUFFER, g_gl_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), quad_vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(k_quad_vertices), k_quad_vertices, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    g_gl_rotated = 0;
 
     if (!gl_create_texture(g_frame_w, g_frame_h)) goto fail;
 
@@ -606,6 +624,28 @@ static void *render_thread(void *arg) {
                         glViewport(0, 0, surface_w, surface_h);
                     }
 
+                    // Detect orientation mismatch using actual surface dimensions
+                    // (from surfaceChanged). Some devices report rotation=LANDSCAPE
+                    // but the physical framebuffer stays portrait (Boox Palma).
+                    int frame_is_landscape = (render_w > render_h) ? 1 : 0;
+                    int surface_is_landscape = (g_surface_w > g_surface_h) ? 1 : 0;
+                    int need_rotation = (g_surface_w > 0 && frame_is_landscape != surface_is_landscape) ? 1 : 0;
+                    if (need_rotation != g_gl_rotated) {
+                        g_gl_rotated = need_rotation;
+                        glBindBuffer(GL_ARRAY_BUFFER, g_gl_vbo);
+                        if (need_rotation) {
+                            glBufferData(GL_ARRAY_BUFFER, sizeof(k_quad_vertices_rot90),
+                                         k_quad_vertices_rot90, GL_STATIC_DRAW);
+                            LOGI("Rotation: enabled (frame %ux%u, surface %ux%u)",
+                                 render_w, render_h, g_surface_w, g_surface_h);
+                        } else {
+                            glBufferData(GL_ARRAY_BUFFER, sizeof(k_quad_vertices),
+                                         k_quad_vertices, GL_STATIC_DRAW);
+                            LOGI("Rotation: disabled (orientations match)");
+                        }
+                        glBindBuffer(GL_ARRAY_BUFFER, 0);
+                    }
+
                     glUseProgram(g_gl_program);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, g_gl_texture);
@@ -643,26 +683,50 @@ static void *render_thread(void *arg) {
                     int dst_stride = nbuf.stride * 4;
                     int fw = (int)render_w;
                     int fh = (int)render_h;
-                    for (int y = 0; y < fh && y < nbuf.height; y++) {
-                        uint8_t *row = dst + y * dst_stride;
-                        const uint8_t *row_src = render_local + y * fw;
-                        int x = 0;
-                        for (; x + 16 <= fw && x + 16 <= nbuf.width; x += 16) {
-                            uint8x16_t g = vld1q_u8(row_src + x);
-                            uint8x16_t ff = vdupq_n_u8(0xFF);
-                            uint8x16x4_t rgbx;
-                            rgbx.val[0] = g;
-                            rgbx.val[1] = g;
-                            rgbx.val[2] = g;
-                            rgbx.val[3] = ff;
-                            vst4q_u8(row + x * 4, rgbx);
+
+                    // Check if we need to rotate (landscape frame on portrait surface)
+                    int cpu_frame_landscape = (fw > fh) ? 1 : 0;
+                    int cpu_surface_landscape = (g_surface_w > g_surface_h) ? 1 : 0;
+                    int cpu_need_rotation = (g_surface_w > 0 && cpu_frame_landscape != cpu_surface_landscape) ? 1 : 0;
+
+                    if (cpu_need_rotation) {
+                        // 90° CW rotation: frame(x,y) → screen(fh-1-y, x)
+                        // Output dimensions: width=fh, height=fw
+                        int out_w = fh < nbuf.width ? fh : nbuf.width;
+                        int out_h = fw < nbuf.height ? fw : nbuf.height;
+                        for (int sy = 0; sy < out_h; sy++) {
+                            uint8_t *row = dst + sy * dst_stride;
+                            for (int sx = 0; sx < out_w; sx++) {
+                                // Screen (sx,sy) → frame (sy, fh-1-sx)
+                                uint8_t v = render_local[((fh - 1 - sx) * fw) + sy];
+                                row[sx * 4 + 0] = v;
+                                row[sx * 4 + 1] = v;
+                                row[sx * 4 + 2] = v;
+                                row[sx * 4 + 3] = 0xFF;
+                            }
                         }
-                        for (; x < fw && x < nbuf.width; x++) {
-                            uint8_t v = row_src[x];
-                            row[x * 4 + 0] = v;
-                            row[x * 4 + 1] = v;
-                            row[x * 4 + 2] = v;
-                            row[x * 4 + 3] = 0xFF;
+                    } else {
+                        for (int y = 0; y < fh && y < nbuf.height; y++) {
+                            uint8_t *row = dst + y * dst_stride;
+                            const uint8_t *row_src = render_local + y * fw;
+                            int x = 0;
+                            for (; x + 16 <= fw && x + 16 <= nbuf.width; x += 16) {
+                                uint8x16_t g = vld1q_u8(row_src + x);
+                                uint8x16_t ff = vdupq_n_u8(0xFF);
+                                uint8x16x4_t rgbx;
+                                rgbx.val[0] = g;
+                                rgbx.val[1] = g;
+                                rgbx.val[2] = g;
+                                rgbx.val[3] = ff;
+                                vst4q_u8(row + x * 4, rgbx);
+                            }
+                            for (; x < fw && x < nbuf.width; x++) {
+                                uint8_t v = row_src[x];
+                                row[x * 4 + 0] = v;
+                                row[x * 4 + 1] = v;
+                                row[x * 4 + 2] = v;
+                                row[x * 4 + 3] = 0xFF;
+                            }
                         }
                     }
                     clock_gettime(CLOCK_MONOTONIC, &t4b);
@@ -1007,4 +1071,16 @@ Java_com_daylight_mirror_MirrorActivity_nativeStop(
         (*env)->DeleteGlobalRef(env, g_activity);
         g_activity = NULL;
     }
+}
+
+// JNI: called from Kotlin on surfaceChanged with actual surface dimensions.
+// Some devices (Boox Palma) report rotation=LANDSCAPE but the physical
+// framebuffer stays portrait — this gives us the ground truth.
+JNIEXPORT void JNICALL
+Java_com_daylight_mirror_MirrorActivity_nativeSetSurfaceSize(
+    JNIEnv *env, jobject thiz, jint width, jint height)
+{
+    g_surface_w = (uint32_t)width;
+    g_surface_h = (uint32_t)height;
+    LOGI("Surface size: %ux%u (from surfaceChanged)", g_surface_w, g_surface_h);
 }

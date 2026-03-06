@@ -31,6 +31,7 @@ class MirrorActivity : Activity() {
 
     private external fun nativeStart(surface: Surface, host: String, port: Int)
     private external fun nativeStop()
+    private external fun nativeSetSurfaceSize(width: Int, height: Int)
 
     private lateinit var statusTitle: TextView
     private lateinit var statusHint: TextView
@@ -108,7 +109,14 @@ class MirrorActivity : Activity() {
                 nativeStart(holder.surface, "127.0.0.1", 8888)
             }
 
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                // Pass actual surface dimensions to native — this is the real
+                // window size after any (or failed) orientation change.
+                // Used to detect when the device claims landscape but the
+                // surface is still physically portrait (e.g. Boox Palma).
+                android.util.Log.i("DaylightMirror", "surfaceChanged: ${width}x${height}")
+                nativeSetSurfaceSize(width, height)
+            }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 nativeStop()
