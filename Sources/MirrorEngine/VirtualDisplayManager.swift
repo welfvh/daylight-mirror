@@ -14,9 +14,16 @@ class VirtualDisplayManager {
     let width: UInt
     let height: UInt
 
+    /// Each virtual display needs a unique serial number so macOS treats them as
+    /// separate displays. Without this, the second display creation fails (ID 0).
+    private static var nextSerial: UInt32 = 1
+
     init(width: UInt, height: UInt, hiDPI: Bool = false, name: String = "Daylight DC-1") {
         self.width = width
         self.height = height
+
+        let serial = VirtualDisplayManager.nextSerial
+        VirtualDisplayManager.nextSerial += 1
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
@@ -29,7 +36,7 @@ class VirtualDisplayManager {
         )
         descriptor.productID = 0xDA7E
         descriptor.vendorID = 0xDA7E
-        descriptor.serialNum = 0x0001
+        descriptor.serialNum = serial
 
         virtualDisplay = CGVirtualDisplay(descriptor: descriptor)
         displayID = virtualDisplay.displayID

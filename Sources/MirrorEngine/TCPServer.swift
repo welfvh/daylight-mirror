@@ -71,7 +71,7 @@ class TCPServer {
     func start() {
         listener.stateUpdateHandler = { state in
             if case .ready = state {
-                print("TCP server on tcp://localhost:\(TCP_PORT)")
+                print("TCP server on tcp://localhost:\(self.listener.port?.rawValue ?? 0)")
             }
         }
 

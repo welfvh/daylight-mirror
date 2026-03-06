@@ -260,7 +260,6 @@ public class MirrorEngine: ObservableObject {
         let devices = ADBBridge.isAvailable() ? ADBBridge.connectedDevices() : []
         if devices.isEmpty {
             NSLog("[Engine] No devices found — creating default session (DC-1 resolution)")
-            // Still create a virtual display + capture so it's ready when a device connects
             let pseudoDevice = ConnectedDevice(serial: "none", model: "unknown")
             let session = DeviceSession(
                 port: TCP_PORT, resolution: resolution,
@@ -268,17 +267,24 @@ public class MirrorEngine: ObservableObject {
             )
             await startSession(session, wsServer: wsServer)
         } else {
+            // Sort: DC-1 first (gets primary port 8888), then other devices.
+            // This ensures stable port assignment regardless of USB enumeration order.
+            let sorted = devices.sorted { a, _ in a.deviceFamily == .daylightDC1 }
             var port = TCP_PORT
-            for device in devices {
+            for device in sorted {
                 let res = resolutionForDevice(device)
                 let session = DeviceSession(
                     port: port, resolution: res,
                     displayMode: displayMode, device: device
                 )
-                // First (primary) session gets the WS server for browser preview
+                // Primary session (port 8888) gets the WS server for browser preview
                 let ws: WebSocketServer? = (port == TCP_PORT) ? wsServer : nil
                 await startSession(session, wsServer: ws)
                 port += 1
+                // Stagger virtual display creation — macOS needs time to register each one
+                if sorted.count > 1 {
+                    try? await Task.sleep(for: .seconds(2))
+                }
             }
         }
 
