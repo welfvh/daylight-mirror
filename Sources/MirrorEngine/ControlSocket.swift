@@ -230,6 +230,33 @@ public class ControlSocket {
                 return "OK \(String(format: "%.1f", engine.contrastAmount))"
             }
 
+        case "BOOXRESOLUTION":
+            if let arg = arg {
+                let normalizedArg = arg.lowercased().replacingOccurrences(of: "-", with: " ")
+                let preset = DisplayResolution.allCases.first {
+                    $0.rawValue == arg || $0.label.lowercased() == normalizedArg
+                }
+                guard let newRes = preset else {
+                    let valid = DisplayResolution.allCases.filter { $0.device == .booxPalma }
+                        .map { $0.label.lowercased().replacingOccurrences(of: " ", with: "-") }.joined(separator: ", ")
+                    return "ERR unknown resolution (valid: \(valid))"
+                }
+                if newRes == engine.booxResolution {
+                    return "OK \(newRes.label.lowercased()) (no change)"
+                }
+                engine.booxResolution = newRes
+                if engine.status == .running {
+                    engine.stop()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        Task { @MainActor in await self.engine.start() }
+                    }
+                    return "OK \(newRes.label.lowercased()) (restarting)"
+                }
+                return "OK \(newRes.label.lowercased())"
+            } else {
+                return "OK \(engine.booxResolution.label.lowercased())"
+            }
+
         case "DISPLAYMODE":
             if let arg = arg?.lowercased() {
                 guard let mode = DisplayMode(rawValue: arg) else {

@@ -1,15 +1,10 @@
 // MirrorEngine.swift — Core orchestrator for Daylight Mirror.
 //
-// Coordinates: virtual display creation, screen capture, TCP/WS/HTTP servers,
-// display controls (brightness, warmth, backlight), ADB bridge, USB device
-// monitoring, and the control socket for CLI integration.
+// Coordinates multiple DeviceSessions (one per connected Android device), shared
+// servers (WS, HTTP), display controls, USB monitoring, and the control socket.
 //
 // Used by both the CLI (`daylight-mirror`) and the menu bar app (`DaylightMirror`).
 // All heavy lifting is zero-GPU: vImage SIMD greyscale + LZ4 delta compression.
-//
-// Individual components live in their own files (see Configuration.swift,
-// ADBBridge.swift, ScreenCapture.swift, etc.). This file contains only the
-// MirrorEngine class that wires them together.
 
 import Foundation
 import AppKit
@@ -27,25 +22,25 @@ public class MirrorEngine: ObservableObject {
     @Published public var warmth: Int = 128
     @Published public var backlightOn: Bool = true
     @Published public var adbConnected: Bool = false
-    @Published public var apkInstallStatus: String = ""  // Empty = idle, "Installing..." = in progress, "Installed" = done, or error
+    @Published public var apkInstallStatus: String = ""
     @Published public var clientCount: Int = 0
     @Published public var totalFrames: Int = 0
     @Published public var frameSizeKB: Int = 0
-    @Published public var greyMs: Double = 0      // Greyscale + sharpen time per frame
-    @Published public var compressMs: Double = 0   // LZ4 delta compress time per frame
-    @Published public var jitterMs: Double = 0     // SCStream delivery jitter (deviation from expected interval)
-    @Published public var rttMs: Double = 0        // Round-trip latency (Mac send → Android ACK)
-    @Published public var rttP95Ms: Double = 0     // 95th percentile RTT
-    @Published public var skippedFrames: Int = 0  // Frames skipped due to Android backpressure
+    @Published public var greyMs: Double = 0
+    @Published public var compressMs: Double = 0
+    @Published public var jitterMs: Double = 0
+    @Published public var rttMs: Double = 0
+    @Published public var rttP95Ms: Double = 0
+    @Published public var skippedFrames: Int = 0
     @Published public var sharpenAmount: Double = 1.0 {
         didSet {
-            capture?.sharpenAmount = sharpenAmount
+            for session in sessions { session.updateSharpen(sharpenAmount) }
             UserDefaults.standard.set(sharpenAmount, forKey: "sharpenAmount")
         }
     }
     @Published public var contrastAmount: Double = 1.0 {
         didSet {
-            capture?.contrastAmount = contrastAmount
+            for session in sessions { session.updateContrast(contrastAmount) }
             UserDefaults.standard.set(contrastAmount, forKey: "contrastAmount")
         }
     }
@@ -53,23 +48,26 @@ public class MirrorEngine: ObservableObject {
     @Published public var deviceDetected: Bool = false
     @Published public var updateVersion: String? = nil
     @Published public var updateURL: String? = nil
+    /// Resolution preference for DC-1 devices.
     @Published public var resolution: DisplayResolution {
         didSet { UserDefaults.standard.set(resolution.rawValue, forKey: "resolution") }
+    }
+    /// Resolution preference for Boox Palma devices.
+    @Published public var booxResolution: DisplayResolution {
+        didSet { UserDefaults.standard.set(booxResolution.rawValue, forKey: "booxResolution") }
     }
     @Published public var displayMode: DisplayMode {
         didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: "displayMode") }
     }
 
-    private var displayManager: VirtualDisplayManager?
-    private var tcpServer: TCPServer?
+    /// Active device sessions — one per connected Android device.
+    private(set) var sessions: [DeviceSession] = []
     private var wsServer: WebSocketServer?
     private var httpServer: HTTPServer?
-    private var capture: ScreenCapture?
     private var displayController: DisplayController?
-    private var compositorPacer: CompositorPacer?
     private var controlSocket: ControlSocket?
     private var usbMonitor: USBDeviceMonitor?
-    private var savedMacBrightness: Float?   // Mac brightness before auto-dim
+    private var savedMacBrightness: Float?
     /// When true, auto-start/stop mirroring based on USB device state.
     @Published public var autoMirrorEnabled: Bool = true {
         didSet { UserDefaults.standard.set(autoMirrorEnabled, forKey: "autoMirrorEnabled") }
@@ -82,6 +80,8 @@ public class MirrorEngine: ObservableObject {
     public init() {
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
         self.resolution = DisplayResolution(rawValue: saved) ?? .sharp
+        let savedBoox = UserDefaults.standard.string(forKey: "booxResolution") ?? ""
+        self.booxResolution = DisplayResolution(rawValue: savedBoox) ?? .booxSharp
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
@@ -94,11 +94,10 @@ public class MirrorEngine: ObservableObject {
         if UserDefaults.standard.object(forKey: "autoDimMac") != nil {
             self.autoDimMac = UserDefaults.standard.bool(forKey: "autoDimMac")
         }
-        NSLog("[MirrorEngine] init, resolution: %@, sharpen: %.1f, contrast: %.1f",
-              resolution.rawValue, sharpenAmount, contrastAmount)
+        NSLog("[MirrorEngine] init, dc1: %@, boox: %@, mode: %@, sharpen: %.1f",
+              resolution.rawValue, booxResolution.rawValue, displayMode.rawValue, sharpenAmount)
 
         // Control socket — always listening so CLI can send START/STOP/etc.
-        // Started after init completes (self is fully initialized).
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let sock = ControlSocket(engine: self)
@@ -106,8 +105,7 @@ public class MirrorEngine: ObservableObject {
             self.controlSocket = sock
         }
 
-        // USB device monitoring — auto-detect DC-1 connect/disconnect
-        // Ensure adb server is running before polling, otherwise `adb devices` returns nothing.
+        // USB device monitoring — auto-detect connect/disconnect
         DispatchQueue.global(qos: .utility).async {
             if ADBBridge.isAvailable() { ADBBridge.ensureServerRunning() }
             DispatchQueue.main.async { [weak self] in
@@ -135,7 +133,7 @@ public class MirrorEngine: ObservableObject {
                             }
                         }
                     } else if self.status == .running {
-                        NSLog("[USB] Device reconnected — re-establishing tunnel")
+                        NSLog("[USB] Device reconnected — re-establishing tunnels")
                         self.reconnect()
                     }
                 }
@@ -171,7 +169,6 @@ public class MirrorEngine: ObservableObject {
     public func setupGlobalShortcut() {
         NSLog("[Global] Setting up Ctrl+F8 hotkey via NSEvent monitors...")
 
-        // Monitor regular key events (Ctrl+F8 = keyCode 100)
         globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.modifierFlags.contains(.control) && event.keyCode == 100 {
                 NSLog("[Global] Ctrl+F8 pressed — toggling")
@@ -179,7 +176,6 @@ public class MirrorEngine: ObservableObject {
             }
         }
 
-        // Monitor system-defined events (F8 as media key = play/pause)
         globalSystemMonitor = NSEvent.addGlobalMonitorForEvents(matching: .systemDefined) { [weak self] event in
             guard event.subtype.rawValue == 8 else { return }
             let data1 = event.data1
@@ -197,73 +193,43 @@ public class MirrorEngine: ObservableObject {
               globalSystemMonitor != nil ? "yes" : "no")
     }
 
-    /// Toggle mirror on/off from keyboard shortcut
     private func toggleMirror() {
         DispatchQueue.main.async {
             if self.status == .running {
                 self.stop()
             } else if self.status == .idle || self.status == .waitingForDevice {
-                Task { @MainActor in
-                    await self.start()
-                }
+                Task { @MainActor in await self.start() }
             }
         }
     }
 
     // MARK: - Permission & Device Checks
 
-    /// Check if Screen Recording permission is granted.
-    public static func hasScreenRecordingPermission() -> Bool {
-        return CGPreflightScreenCaptureAccess()
-    }
-
-    /// Prompt the user for Screen Recording permission (opens System Settings).
-    public static func requestScreenRecordingPermission() {
-        CGRequestScreenCaptureAccess()
-    }
-
-    /// Check if Accessibility permission is granted (needed for global keyboard shortcuts).
-    public static func hasAccessibilityPermission() -> Bool {
-        return AXIsProcessTrusted()
-    }
-
-    /// Prompt for Accessibility permission with the system dialog.
+    public static func hasScreenRecordingPermission() -> Bool { CGPreflightScreenCaptureAccess() }
+    public static func requestScreenRecordingPermission() { CGRequestScreenCaptureAccess() }
+    public static func hasAccessibilityPermission() -> Bool { AXIsProcessTrusted() }
     public static func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
     }
-
-    /// Check if adb is installed.
-    public static func hasADB() -> Bool {
-        return ADBBridge.isAvailable()
-    }
-
-    /// Check if a Daylight device is connected via USB.
-    public static func hasDevice() -> Bool {
-        return ADBBridge.connectedDevice() != nil
-    }
-
-    /// Whether the onboarding setup has been completed.
+    public static func hasADB() -> Bool { ADBBridge.isAvailable() }
+    public static func hasDevice() -> Bool { ADBBridge.connectedDevice() != nil }
     public static var setupCompleted: Bool {
         get { UserDefaults.standard.bool(forKey: "setupCompleted") }
         set { UserDefaults.standard.set(newValue, forKey: "setupCompleted") }
     }
-
-    /// Whether all required permissions are granted.
     public static var allPermissionsGranted: Bool {
         hasScreenRecordingPermission() && hasAccessibilityPermission()
     }
+
+    // MARK: - Start / Stop
 
     @MainActor
     public func start() async {
         guard status == .idle || status != .starting else { return }
 
-        // Disable font smoothing for cleaner greyscale rendering on e-ink
-        if fontSmoothingDisabled {
-            setFontSmoothing(enabled: false)
-        }
+        if fontSmoothingDisabled { setFontSmoothing(enabled: false) }
 
-        // Check Screen Recording permission before attempting capture
         if !Self.hasScreenRecordingPermission() {
             Self.requestScreenRecordingPermission()
             status = .error("Grant Screen Recording permission in System Settings, then retry")
@@ -272,209 +238,155 @@ public class MirrorEngine: ObservableObject {
 
         status = .starting
 
-        // 1. Virtual display at selected resolution
-        let w = resolution.width
-        let h = resolution.height
-        let displayName = resolution.device.rawValue
-        displayManager = VirtualDisplayManager(width: w, height: h, hiDPI: resolution.isHiDPI, name: displayName)
-        try? await Task.sleep(for: .seconds(1))
-
-        // 2. Mirror mode: clone the built-in display to the virtual display.
-        //    Extended mode: virtual display is an independent second screen.
-        if displayMode == .mirror {
-            displayManager?.mirrorBuiltInDisplay()
-        } else {
-            NSLog("[Engine] Extended display mode — virtual display is a second screen")
-        }
-        try? await Task.sleep(for: .seconds(1))
-
-        // 3b. Compositor pacer — forces display compositor to deliver frames at TARGET_FPS.
-        // Dirty-pixel window must be on the VIRTUAL display's screen to trigger its compositor.
-        let pacer = CompositorPacer(targetDisplayID: displayManager!.displayID)
-        pacer.start()
-        compositorPacer = pacer
-
-        // 4. Servers
+        // Shared servers (WS for browser preview, HTTP for fallback page)
         do {
-            let tcp = try TCPServer(port: TCP_PORT)
-            tcp.frameWidth = UInt16(w)
-            tcp.frameHeight = UInt16(h)
-            tcp.onClientCountChanged = { [weak self] count in
-                DispatchQueue.main.async {
-                    let wasConnected = (self?.clientCount ?? 0) > 0
-                    self?.clientCount = count
-
-                    // Auto-dim Mac when Daylight connects, restore when it disconnects
-                    if self?.autoDimMac == true {
-                        if count > 0 && !wasConnected {
-                            if let current = MacBrightness.get() {
-                                self?.savedMacBrightness = current
-                                MacBrightness.set(0)
-                                print("[Mac] Auto-dimmed (was \(current))")
-                            }
-                        } else if count == 0 && wasConnected {
-                            if let saved = self?.savedMacBrightness {
-                                MacBrightness.set(saved)
-                                self?.savedMacBrightness = nil
-                                print("[Mac] Brightness restored to \(saved)")
-                            }
-                        }
-                    }
-                }
-            }
-            tcp.onLatencyStats = { [weak self] stats in
-                DispatchQueue.main.async {
-                    self?.rttMs = stats.rttAvgMs
-                    self?.rttP95Ms = stats.rttP95Ms
-                }
-            }
-            tcp.start()
-            tcpServer = tcp
-
             let ws = try WebSocketServer(port: WS_PORT)
             ws.start()
             wsServer = ws
 
-            let http = try HTTPServer(port: HTTP_PORT, width: w, height: h)
+            let http = try HTTPServer(port: HTTP_PORT, width: resolution.width, height: resolution.height)
             http.start()
             httpServer = http
         } catch {
             status = .error("Server failed: \(error.localizedDescription)")
-            displayManager = nil
             return
         }
 
-        // 4b. ADB tunnel + auto-install APK + launch (AFTER server is listening)
+        // Detect connected devices and create a session for each
         if ADBBridge.isAvailable() {
             ADBBridge.ensureServerRunning()
-            await establishADBConnection()
-        } else {
-            adbConnected = false
-            NSLog("[ADB] No adb binary — skipping device setup")
         }
 
-        // 5. Capture
-        let cap = ScreenCapture(
-            tcpServer: tcpServer!, wsServer: wsServer!,
-            targetDisplayID: displayManager!.displayID,
-            width: Int(w), height: Int(h)
-        )
-        cap.sharpenAmount = sharpenAmount
-        cap.contrastAmount = contrastAmount
-        cap.onStats = { [weak self] fps, bw, frameKB, total, grey, compress, jitter, skipped in
-            DispatchQueue.main.async {
-                self?.fps = fps
-                self?.bandwidth = bw
-                self?.totalFrames = total
-                self?.frameSizeKB = frameKB
-                self?.greyMs = grey
-                self?.compressMs = compress
-                self?.jitterMs = jitter
-                self?.skippedFrames = skipped
+        let devices = ADBBridge.isAvailable() ? ADBBridge.connectedDevices() : []
+        if devices.isEmpty {
+            NSLog("[Engine] No devices found — creating default session (DC-1 resolution)")
+            // Still create a virtual display + capture so it's ready when a device connects
+            let pseudoDevice = ConnectedDevice(serial: "none", model: "unknown")
+            let session = DeviceSession(
+                port: TCP_PORT, resolution: resolution,
+                displayMode: displayMode, device: pseudoDevice
+            )
+            await startSession(session, wsServer: wsServer)
+        } else {
+            var port = TCP_PORT
+            for device in devices {
+                let res = resolutionForDevice(device)
+                let session = DeviceSession(
+                    port: port, resolution: res,
+                    displayMode: displayMode, device: device
+                )
+                // First (primary) session gets the WS server for browser preview
+                let ws: WebSocketServer? = (port == TCP_PORT) ? wsServer : nil
+                await startSession(session, wsServer: ws)
+                port += 1
             }
         }
-        capture = cap
 
-        do {
-            try await cap.start()
-        } catch let error as ScreenCaptureError {
-            status = .error(error.localizedDescription)
-            compositorPacer?.stop(); compositorPacer = nil
-            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop()
-            tcpServer = nil; wsServer = nil; httpServer = nil
-            displayManager = nil
-            return
-        } catch {
-            status = .error("Capture failed: \(error.localizedDescription)")
-            compositorPacer?.stop(); compositorPacer = nil
-            tcpServer?.stop(); wsServer?.stop(); httpServer?.stop()
-            tcpServer = nil; wsServer = nil; httpServer = nil
-            displayManager = nil
-            return
+        // Display controller — attach to DC-1 session's TCP server for brightness/warmth
+        if let dc1Session = sessions.first(where: { $0.device.deviceFamily == .daylightDC1 }),
+           let tcp = dc1Session.tcpServer {
+            let serial = dc1Session.device.serial != "none" ? dc1Session.device.serial : nil
+            let dc = DisplayController(tcpServer: tcp, deviceSerial: serial)
+            dc.onBrightnessChanged = { [weak self] val in
+                DispatchQueue.main.async { self?.brightness = val }
+            }
+            dc.onWarmthChanged = { [weak self] val in
+                DispatchQueue.main.async { self?.warmth = val }
+            }
+            dc.onBacklightChanged = { [weak self] on in
+                DispatchQueue.main.async { self?.backlightOn = on }
+            }
+            dc.start()
+            displayController = dc
+            brightness = dc.currentBrightness
+            warmth = dc.currentWarmth
+            backlightOn = dc.backlightOn
         }
 
-        // 6. Display controller (keyboard shortcuts)
-        let dc = DisplayController(tcpServer: tcpServer!)
-        dc.onBrightnessChanged = { [weak self] val in
-            DispatchQueue.main.async { self?.brightness = val }
-        }
-        dc.onWarmthChanged = { [weak self] val in
-            DispatchQueue.main.async { self?.warmth = val }
-        }
-        dc.onBacklightChanged = { [weak self] on in
-            DispatchQueue.main.async { self?.backlightOn = on }
-        }
-        dc.start()
-        displayController = dc
-
-        // Sync initial values
-        brightness = dc.currentBrightness
-        warmth = dc.currentWarmth
-        backlightOn = dc.backlightOn
-
+        adbConnected = sessions.contains { $0.adbConnected }
+        apkInstallStatus = ""
         status = .running
 
+        let sessionSummary = sessions.map { "\($0.device.model)@\($0.port):\($0.resolution.rawValue)" }
         print("---")
-        print("Native TCP:  tcp://localhost:\(TCP_PORT)")
-        print("WS fallback: ws://localhost:\(WS_PORT)")
-        print("HTML page:   http://localhost:\(HTTP_PORT)")
-        print("Virtual display \(displayManager!.displayID): \(w)x\(h)")
+        print("Sessions: \(sessionSummary.joined(separator: ", "))")
+        print("WS: ws://localhost:\(WS_PORT) | HTTP: http://localhost:\(HTTP_PORT)")
     }
 
-    /// Retry ADB device detection, tunnel setup, APK install, and app launch.
-    /// Retries up to 3 times with 1-second delays to handle adb server startup lag.
+    /// Start a single DeviceSession and wire up its stats callbacks.
     @MainActor
-    private func establishADBConnection() async {
-        let maxAttempts = 3
-
-        for attempt in 1...maxAttempts {
-            guard let device = ADBBridge.connectedDevice() else {
-                if attempt < maxAttempts {
-                    NSLog("[ADB] No device found (attempt %d/%d), retrying...", attempt, maxAttempts)
-                    apkInstallStatus = "Looking for device... (\(attempt)/\(maxAttempts))"
-                    try? await Task.sleep(for: .seconds(1))
-                    continue
-                }
-                NSLog("[ADB] No device found after %d attempts", maxAttempts)
-                apkInstallStatus = "No device found — connect via USB and tap Reconnect"
-                adbConnected = false
-                return
-            }
-
-            NSLog("[ADB] Device found: %@ (attempt %d)", device, attempt)
-
-            // Auto-install bundled APK if the companion app isn't on the device yet
-            if !ADBBridge.isAppInstalled() {
-                apkInstallStatus = "Installing companion app..."
-                NSLog("[ADB] Companion app not found, installing bundled APK...")
-                if let error = ADBBridge.installBundledAPK() {
-                    apkInstallStatus = "APK install failed: \(error)"
-                    NSLog("[ADB] APK install error: %@", error)
-                } else {
-                    apkInstallStatus = "Installed"
-                    NSLog("[ADB] Companion app installed")
-                }
-            }
-
-            let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
-            if tunnelOK {
-                NSLog("[ADB] Reverse tunnel tcp:%d established", TCP_PORT)
-                ADBBridge.launchApp(forceRestart: true)
-                adbConnected = true
-                apkInstallStatus = ""
-                return
-            }
-
-            if attempt < maxAttempts {
-                NSLog("[ADB] Tunnel failed (attempt %d/%d), retrying...", attempt, maxAttempts)
-                apkInstallStatus = "Tunnel failed, retrying... (\(attempt)/\(maxAttempts))"
-                try? await Task.sleep(for: .seconds(1))
+    private func startSession(_ session: DeviceSession, wsServer: WebSocketServer?) async {
+        // Wire stats back to engine's @Published properties (aggregated across sessions)
+        session.onStatsChanged = { [weak self] in
+            DispatchQueue.main.async { self?.aggregateStats() }
+        }
+        session.onClientCountChanged = { [weak self] _ in
+            DispatchQueue.main.async { self?.aggregateClientCount() }
+        }
+        session.onLatencyStats = { [weak self] stats in
+            DispatchQueue.main.async {
+                self?.rttMs = stats.rttAvgMs
+                self?.rttP95Ms = stats.rttP95Ms
             }
         }
 
-        NSLog("[ADB] WARNING: Reverse tunnel failed after %d attempts", maxAttempts)
-        apkInstallStatus = "Tunnel failed — tap Reconnect to retry"
-        adbConnected = false
+        do {
+            try await session.start(
+                wsServer: wsServer,
+                sharpenAmount: sharpenAmount,
+                contrastAmount: contrastAmount
+            )
+        } catch {
+            NSLog("[Engine] Session %@ failed: %@", session.device.serial, error.localizedDescription)
+        }
+
+        sessions.append(session)
+    }
+
+    /// Pick the right resolution for a detected device based on its family.
+    private func resolutionForDevice(_ device: ConnectedDevice) -> DisplayResolution {
+        switch device.deviceFamily {
+        case .booxPalma: return booxResolution
+        case .daylightDC1: return resolution
+        }
+    }
+
+    /// Aggregate stats from all sessions for the UI.
+    private func aggregateStats() {
+        // Show primary session's stats (first session, typically DC-1)
+        guard let primary = sessions.first else { return }
+        fps = primary.fps
+        bandwidth = sessions.reduce(0) { $0 + $1.bandwidth }
+        totalFrames = sessions.reduce(0) { $0 + $1.totalFrames }
+        frameSizeKB = primary.frameSizeKB
+        greyMs = primary.greyMs
+        compressMs = primary.compressMs
+        jitterMs = primary.jitterMs
+        skippedFrames = sessions.reduce(0) { $0 + $1.skippedFrames }
+    }
+
+    /// Aggregate client count from all sessions.
+    private func aggregateClientCount() {
+        let total = sessions.reduce(0) { $0 + $1.clientCount }
+        let wasConnected = clientCount > 0
+        clientCount = total
+
+        // Auto-dim Mac when any client connects
+        if autoDimMac {
+            if total > 0 && !wasConnected {
+                if let current = MacBrightness.get() {
+                    savedMacBrightness = current
+                    MacBrightness.set(0)
+                    print("[Mac] Auto-dimmed (was \(current))")
+                }
+            } else if total == 0 && wasConnected {
+                if let saved = savedMacBrightness {
+                    MacBrightness.set(saved)
+                    savedMacBrightness = nil
+                    print("[Mac] Brightness restored to \(saved)")
+                }
+            }
+        }
     }
 
     public func stop() {
@@ -482,7 +394,6 @@ public class MirrorEngine: ObservableObject {
         if status == .waitingForDevice { status = .idle; return }
         DispatchQueue.main.async { self.status = .stopping }
 
-        // Restore Mac brightness before tearing down (even if toggle was turned off mid-session)
         if let saved = savedMacBrightness {
             MacBrightness.set(saved)
             savedMacBrightness = nil
@@ -490,31 +401,19 @@ public class MirrorEngine: ObservableObject {
         }
 
         Task {
-            // Stop in reverse order (control socket stays alive — it's engine-lifetime)
             displayController?.stop()
             displayController = nil
 
-            compositorPacer?.stop()
-            compositorPacer = nil
+            for session in sessions {
+                await session.stop()
+            }
+            sessions.removeAll()
 
-            await capture?.stop()
-            capture = nil
-
-            tcpServer?.stop()
             wsServer?.stop()
             httpServer?.stop()
-            tcpServer = nil
             wsServer = nil
             httpServer = nil
 
-            // Virtual display disappears on dealloc, mirroring reverts
-            displayManager = nil
-
-            if adbConnected && self.deviceDetected {
-                ADBBridge.removeReverseTunnel(port: TCP_PORT)
-            }
-
-            // Restore font smoothing when mirror stops
             if self.fontSmoothingDisabled {
                 self.setFontSmoothing(enabled: true)
             }
@@ -532,32 +431,32 @@ public class MirrorEngine: ObservableObject {
         }
     }
 
-    /// Lightweight reconnect: re-establish ADB tunnel and relaunch the Android app
-    /// without tearing down the virtual display, capture, or servers.
+    /// Lightweight reconnect: re-establish ADB tunnels and relaunch apps
+    /// without tearing down virtual displays, captures, or servers.
     public func reconnect() {
         guard status == .running else { return }
-        guard clientCount == 0 || !adbConnected else {
-            print("[MirrorEngine] Reconnect skipped — client already connected")
-            return
-        }
         print("[MirrorEngine] Reconnecting ADB...")
         Task.detached {
-            let tunnelOK = ADBBridge.setupReverseTunnel(port: TCP_PORT)
-            if tunnelOK {
-                NSLog("[ADB] Reverse tunnel re-established")
-                ADBBridge.launchApp()
-                await MainActor.run { self.adbConnected = true }
-            } else {
-                NSLog("[ADB] WARNING: Reverse tunnel failed on reconnect")
-                await MainActor.run { self.adbConnected = false }
+            for session in self.sessions {
+                guard !session.adbConnected else { continue }
+                let tunnelOK = ADBBridge.setupReverseTunnel(
+                    serial: session.device.serial,
+                    devicePort: TCP_PORT,
+                    hostPort: session.port
+                )
+                if tunnelOK {
+                    ADBBridge.launchApp(serial: session.device.serial)
+                    NSLog("[ADB] Reconnected %@", session.device.serial)
+                }
+            }
+            await MainActor.run {
+                self.adbConnected = self.sessions.contains { $0.adbConnected }
             }
         }
     }
 
-    /// Quadratic curve with widened landing zone at the low end.
-    ///   pos 0.00–0.03 → off (0)
-    ///   pos 0.03–0.08 → minimum (1)  — ~5% of slider travel
-    ///   pos 0.08–1.00 → quadratic ramp (2–255)
+    // MARK: - Display Controls
+
     public static func brightnessFromSliderPos(_ pos: Double) -> Int {
         if pos < 0.03 { return 0 }
         let raw = pos * pos * 255.0
@@ -584,8 +483,6 @@ public class MirrorEngine: ObservableObject {
         }
     }
 
-    /// Disable macOS font smoothing (subpixel AA). Dramatically improves text clarity
-    /// on greyscale displays like the Daylight DC-1. Restored when mirror stops.
     public func setFontSmoothing(enabled: Bool) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")

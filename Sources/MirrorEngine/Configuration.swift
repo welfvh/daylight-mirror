@@ -6,6 +6,7 @@
 import Foundation
 
 let TCP_PORT: UInt16 = 8888
+let TCP_PORT_SECONDARY: UInt16 = 8889  // Second device gets its own TCP server
 let WS_PORT: UInt16 = 8890
 let HTTP_PORT: UInt16 = 8891
 let TARGET_FPS: Int = 60  // DC-1 panel supports up to 120Hz; 60fps viable with GL shader + NEON opts

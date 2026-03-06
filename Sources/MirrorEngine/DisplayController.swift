@@ -9,6 +9,7 @@ import AppKit
 
 class DisplayController {
     let tcpServer: TCPServer
+    let deviceSerial: String?  // For targeted ADB commands
     var currentBrightness: Int = 128
     var currentWarmth: Int = 128
     var backlightOn: Bool = true
@@ -20,15 +21,16 @@ class DisplayController {
     var onWarmthChanged: ((Int) -> Void)?
     var onBacklightChanged: ((Bool) -> Void)?
 
-    init(tcpServer: TCPServer) {
+    init(tcpServer: TCPServer, deviceSerial: String? = nil) {
         self.tcpServer = tcpServer
+        self.deviceSerial = deviceSerial
     }
 
     func start() {
         // Query current values from device
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
-            if let val = ADBBridge.querySystemSetting("screen_brightness") {
+            if let val = ADBBridge.querySystemSetting("screen_brightness", serial: self.deviceSerial) {
                 self.currentBrightness = val
                 self.savedBrightness = val
                 // Sync to TCPServer so reconnecting clients get the correct value
@@ -36,7 +38,7 @@ class DisplayController {
                 self.onBrightnessChanged?(val)
                 print("[Display] Daylight brightness: \(val)/255")
             }
-            if let val = ADBBridge.querySystemSetting("screen_brightness_amber_rate") {
+            if let val = ADBBridge.querySystemSetting("screen_brightness_amber_rate", serial: self.deviceSerial) {
                 // Effective range is 0-255 (device accepts 0-1023 but caps effect at 255)
                 self.currentWarmth = min(val, 255)
                 self.onWarmthChanged?(self.currentWarmth)
@@ -115,8 +117,8 @@ class DisplayController {
         currentWarmth = max(0, min(255, currentWarmth + delta))
         // Warmth goes via adb shell — screen_brightness_amber_rate is a Daylight-protected
         // setting that only the shell user can write, not a regular Android app.
-        DispatchQueue.global().async { [warmth = currentWarmth] in
-            ADBBridge.setSystemSetting("screen_brightness_amber_rate", value: warmth)
+        DispatchQueue.global().async { [warmth = currentWarmth, serial = deviceSerial] in
+            ADBBridge.setSystemSetting("screen_brightness_amber_rate", value: warmth, serial: serial)
         }
         onWarmthChanged?(currentWarmth)
         print("[Display] Warmth -> \(currentWarmth)/255")
@@ -124,8 +126,8 @@ class DisplayController {
 
     func setWarmth(_ value: Int) {
         currentWarmth = max(0, min(255, value))
-        DispatchQueue.global().async { [warmth = currentWarmth] in
-            ADBBridge.setSystemSetting("screen_brightness_amber_rate", value: warmth)
+        DispatchQueue.global().async { [warmth = currentWarmth, serial = deviceSerial] in
+            ADBBridge.setSystemSetting("screen_brightness_amber_rate", value: warmth, serial: serial)
         }
         onWarmthChanged?(currentWarmth)
         print("[Display] Warmth -> \(currentWarmth)/255")

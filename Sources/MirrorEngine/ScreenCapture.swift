@@ -50,7 +50,7 @@ let TRIVIAL_DELTA_THRESHOLD = 512
 
 class ScreenCapture: NSObject {
     let tcpServer: TCPServer
-    let wsServer: WebSocketServer
+    let wsServer: WebSocketServer?
     let ciContext: CIContext
     let targetDisplayID: CGDirectDisplayID
 
@@ -92,7 +92,7 @@ class ScreenCapture: NSObject {
     let expectedWidth: Int
     let expectedHeight: Int
 
-    init(tcpServer: TCPServer, wsServer: WebSocketServer, targetDisplayID: CGDirectDisplayID, width: Int, height: Int) {
+    init(tcpServer: TCPServer, wsServer: WebSocketServer?, targetDisplayID: CGDirectDisplayID, width: Int, height: Int) {
         self.tcpServer = tcpServer
         self.wsServer = wsServer
         self.targetDisplayID = targetDisplayID
@@ -355,7 +355,7 @@ class ScreenCapture: NSObject {
 
         let t2 = CACurrentMediaTime()
 
-        if wsServer.hasClients {
+        if wsServer?.hasClients == true {
             let ciImage = CIImage(ioSurface: unsafeBitCast(surface, to: IOSurface.self))
             let grayImage = ciImage.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
             if let jpegData = ciContext.jpegRepresentation(
@@ -363,7 +363,7 @@ class ScreenCapture: NSObject {
                 colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
                 options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: JPEG_QUALITY]
             ) {
-                wsServer.broadcast(jpegData)
+                wsServer?.broadcast(jpegData)
             }
         }
 
