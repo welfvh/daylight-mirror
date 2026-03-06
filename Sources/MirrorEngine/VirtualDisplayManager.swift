@@ -14,13 +14,13 @@ class VirtualDisplayManager {
     let width: UInt
     let height: UInt
 
-    init(width: UInt, height: UInt, hiDPI: Bool = false) {
+    init(width: UInt, height: UInt, hiDPI: Bool = false, name: String = "Daylight DC-1") {
         self.width = width
         self.height = height
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(DispatchQueue.main)
-        descriptor.name = "Daylight DC-1"
+        descriptor.name = name
         descriptor.maxPixelsWide = UInt32(width)
         descriptor.maxPixelsHigh = UInt32(height)
         descriptor.sizeInMillimeters = CGSize(

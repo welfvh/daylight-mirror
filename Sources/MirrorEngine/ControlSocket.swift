@@ -230,6 +230,28 @@ public class ControlSocket {
                 return "OK \(String(format: "%.1f", engine.contrastAmount))"
             }
 
+        case "DISPLAYMODE":
+            if let arg = arg?.lowercased() {
+                guard let mode = DisplayMode(rawValue: arg) else {
+                    return "ERR unknown mode (valid: mirror, extended)"
+                }
+                if mode == engine.displayMode {
+                    return "OK \(mode.rawValue) (no change)"
+                }
+                engine.displayMode = mode
+                // Auto-restart if running, since display mode changes how the virtual display is configured
+                if engine.status == .running {
+                    engine.stop()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        Task { @MainActor in await self.engine.start() }
+                    }
+                    return "OK \(mode.rawValue) (restarting)"
+                }
+                return "OK \(mode.rawValue)"
+            } else {
+                return "OK \(engine.displayMode.rawValue)"
+            }
+
         case "FONTSMOOTHING":
             if let arg = parts.dropFirst().first?.lowercased() {
                 switch arg {

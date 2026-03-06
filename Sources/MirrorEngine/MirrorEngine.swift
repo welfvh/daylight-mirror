@@ -56,6 +56,9 @@ public class MirrorEngine: ObservableObject {
     @Published public var resolution: DisplayResolution {
         didSet { UserDefaults.standard.set(resolution.rawValue, forKey: "resolution") }
     }
+    @Published public var displayMode: DisplayMode {
+        didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: "displayMode") }
+    }
 
     private var displayManager: VirtualDisplayManager?
     private var tcpServer: TCPServer?
@@ -79,6 +82,8 @@ public class MirrorEngine: ObservableObject {
     public init() {
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
         self.resolution = DisplayResolution(rawValue: saved) ?? .sharp
+        let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
+        self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
         self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.0
         let savedContrast = UserDefaults.standard.double(forKey: "contrastAmount")
@@ -270,11 +275,17 @@ public class MirrorEngine: ObservableObject {
         // 1. Virtual display at selected resolution
         let w = resolution.width
         let h = resolution.height
-        displayManager = VirtualDisplayManager(width: w, height: h, hiDPI: resolution.isHiDPI)
+        let displayName = resolution.device.rawValue
+        displayManager = VirtualDisplayManager(width: w, height: h, hiDPI: resolution.isHiDPI, name: displayName)
         try? await Task.sleep(for: .seconds(1))
 
-        // 3. Mirroring
-        displayManager?.mirrorBuiltInDisplay()
+        // 2. Mirror mode: clone the built-in display to the virtual display.
+        //    Extended mode: virtual display is an independent second screen.
+        if displayMode == .mirror {
+            displayManager?.mirrorBuiltInDisplay()
+        } else {
+            NSLog("[Engine] Extended display mode — virtual display is a second screen")
+        }
         try? await Task.sleep(for: .seconds(1))
 
         // 3b. Compositor pacer — forces display compositor to deliver frames at TARGET_FPS.

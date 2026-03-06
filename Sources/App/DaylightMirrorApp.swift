@@ -587,6 +587,25 @@ struct MirrorMenuView: View {
 
         Divider()
 
+        // Display mode toggle (mirror vs extended)
+        Picker("Mode", selection: Binding(
+            get: { engine.displayMode },
+            set: { newMode in
+                engine.displayMode = newMode
+                engine.stop()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(0.5))
+                    await engine.start()
+                }
+            }
+        )) {
+            ForEach(DisplayMode.allCases) { mode in
+                Text(mode.label).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+
         // Resolution (change triggers restart)
         Picker("Resolution", selection: Binding(
             get: { engine.resolution },
@@ -599,8 +618,20 @@ struct MirrorMenuView: View {
                 }
             }
         )) {
-            ForEach(DisplayResolution.allCases) { res in
-                Text("\(res.label) (\(res.rawValue))").tag(res)
+            Section("DC-1 Landscape") {
+                ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
+                    Text("\(res.label) (\(res.rawValue))").tag(res)
+                }
+            }
+            Section("DC-1 Portrait") {
+                ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
+                    Text("\(res.label) (\(res.rawValue))").tag(res)
+                }
+            }
+            Section("Boox Palma") {
+                ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
+                    Text("\(res.label) (\(res.rawValue))").tag(res)
+                }
             }
         }
         .pickerStyle(.menu)
@@ -808,10 +839,31 @@ struct MirrorMenuView: View {
 
             Divider()
 
+            // Display mode toggle
+            Picker("Mode", selection: $engine.displayMode) {
+                ForEach(DisplayMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+
             // Resolution picker
             Picker("Resolution", selection: $engine.resolution) {
-                ForEach(DisplayResolution.allCases) { res in
-                    Text("\(res.label) (\(res.rawValue))").tag(res)
+                Section("DC-1 Landscape") {
+                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
+                        Text("\(res.label) (\(res.rawValue))").tag(res)
+                    }
+                }
+                Section("DC-1 Portrait") {
+                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
+                        Text("\(res.label) (\(res.rawValue))").tag(res)
+                    }
+                }
+                Section("Boox Palma") {
+                    ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
+                        Text("\(res.label) (\(res.rawValue))").tag(res)
+                    }
                 }
             }
             .pickerStyle(.menu)
