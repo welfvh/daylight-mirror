@@ -208,6 +208,28 @@ public class ControlSocket {
                 return "ERR not running"
             }
 
+        case "WIRELESS":
+            if let arg = arg {
+                let normalized = arg.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if normalized == "on" {
+                    engine.setWirelessMode(true)
+                    return "OK wireless=detecting"
+                }
+                if normalized == "off" {
+                    engine.setWirelessMode(false)
+                    return "OK wireless=off"
+                }
+                let newValue = engine.setWirelessEndpoint(arg)
+                if engine.status == .running {
+                    engine.reconnect()
+                    return "OK wireless=\(newValue) reconnecting"
+                }
+                return "OK wireless=\(newValue)"
+            } else {
+                let value = engine.adbNetworkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+                return "OK \(value.isEmpty ? "off" : value)"
+            }
+
         case "SHARPEN":
             if let arg = parts.dropFirst().first {
                 guard let val = Double(arg), val >= 0, val <= 3.0 else {
