@@ -271,11 +271,15 @@ public class MirrorEngine: ObservableObject {
             // This ensures stable port assignment regardless of USB enumeration order.
             let sorted = devices.sorted { a, _ in a.deviceFamily == .daylightDC1 }
             var port = TCP_PORT
-            for device in sorted {
+            for (index, device) in sorted.enumerated() {
                 let res = resolutionForDevice(device)
+                // Only the first device gets the user's display mode (mirror/extended).
+                // Additional devices are always extended — macOS only supports mirroring
+                // the built-in display to one virtual display at a time.
+                let mode: DisplayMode = (index == 0) ? displayMode : .extended
                 let session = DeviceSession(
                     port: port, resolution: res,
-                    displayMode: displayMode, device: device
+                    displayMode: mode, device: device
                 )
                 // Primary session (port 8888) gets the WS server for browser preview
                 let ws: WebSocketServer? = (port == TCP_PORT) ? wsServer : nil
