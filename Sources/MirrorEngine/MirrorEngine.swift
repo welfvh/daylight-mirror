@@ -79,10 +79,15 @@ public class MirrorEngine: ObservableObject {
     }
 
     public init() {
+        // Load and validate saved resolutions — ensure each belongs to the correct
+        // device family. A corrupted value (e.g. Boox resolution saved as DC-1's)
+        // would cause wrong virtual display dimensions.
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
-        self.resolution = DisplayResolution(rawValue: saved) ?? .sharp
+        let loadedRes = DisplayResolution(rawValue: saved) ?? .sharp
+        self.resolution = (loadedRes.device == .daylightDC1) ? loadedRes : .sharp
         let savedBoox = UserDefaults.standard.string(forKey: "booxResolution") ?? ""
-        self.booxResolution = DisplayResolution(rawValue: savedBoox) ?? .booxCozy
+        let loadedBoox = DisplayResolution(rawValue: savedBoox) ?? .booxCozy
+        self.booxResolution = (loadedBoox.device == .booxPalma) ? loadedBoox : .booxCozy
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
@@ -94,6 +99,14 @@ public class MirrorEngine: ObservableObject {
         }
         if UserDefaults.standard.object(forKey: "autoDimMac") != nil {
             self.autoDimMac = UserDefaults.standard.bool(forKey: "autoDimMac")
+        }
+        // Write back corrected values if saved resolution didn't match device family
+        if loadedRes.device != .daylightDC1 {
+            UserDefaults.standard.set(resolution.rawValue, forKey: "resolution")
+            NSLog("[MirrorEngine] Reset invalid DC-1 resolution '%@' → '%@'", saved, resolution.rawValue)
+        }
+        if loadedBoox.device != .booxPalma {
+            UserDefaults.standard.set(booxResolution.rawValue, forKey: "booxResolution")
         }
         NSLog("[MirrorEngine] init, dc1: %@, boox: %@, mode: %@, sharpen: %.1f",
               resolution.rawValue, booxResolution.rawValue, displayMode.rawValue, sharpenAmount)
@@ -272,12 +285,11 @@ public class MirrorEngine: ObservableObject {
             // This ensures stable port assignment regardless of USB enumeration order.
             let sorted = devices.sorted { a, _ in a.deviceFamily == .daylightDC1 }
             var port = TCP_PORT
-            for (index, device) in sorted.enumerated() {
+            for (_, device) in sorted.enumerated() {
                 let res = resolutionForDevice(device)
-                // Only the first device gets the user's display mode (mirror/extended).
-                // Additional devices are always extended — macOS only supports mirroring
-                // the built-in display to one virtual display at a time.
-                let mode: DisplayMode = (index == 0) ? displayMode : .extended
+                // DC-1 always mirrors the Mac's built-in display.
+                // Boox (and any additional devices) always get their own extended display.
+                let mode: DisplayMode = (device.deviceFamily == .daylightDC1) ? .mirror : .extended
                 let session = DeviceSession(
                     port: port, resolution: res,
                     displayMode: mode, device: device
