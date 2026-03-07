@@ -7,6 +7,7 @@ import Foundation
 
 let TCP_PORT: UInt16 = 8888
 let TCP_PORT_SECONDARY: UInt16 = 8889  // Second device gets its own TCP server
+let INPUT_PORT: UInt16 = 8892          // Touch input from device → Mac cursor
 let WS_PORT: UInt16 = 8890
 let HTTP_PORT: UInt16 = 8891
 let TARGET_FPS: Int = 60  // DC-1 panel supports up to 120Hz; 60fps viable with GL shader + NEON opts
@@ -92,6 +93,14 @@ public enum DisplayMode: String, CaseIterable, Identifiable {
 let MAGIC_FRAME: [UInt8] = [0xDA, 0x7E]
 let MAGIC_CMD: [UInt8] = [0xDA, 0x7F]
 let MAGIC_ACK: [UInt8] = [0xDA, 0x7A]  // ACK from Android → Mac for RTT measurement
+let MAGIC_INPUT: [UInt8] = [0xDA, 0x70] // Touch input packet magic
+
+// Touch input event types
+let INPUT_TOUCH_DOWN: UInt8 = 0x01
+let INPUT_TOUCH_MOVE: UInt8 = 0x02
+let INPUT_TOUCH_UP: UInt8 = 0x03
+let INPUT_SCROLL: UInt8 = 0x04
+let INPUT_PACKET_SIZE = 23  // [DA 70][type:1][x:4][y:4][dx:4][dy:4][pointer:4]
 let FLAG_KEYFRAME: UInt8 = 0x01
 let CMD_BRIGHTNESS: UInt8 = 0x01
 let CMD_WARMTH: UInt8 = 0x02

@@ -405,6 +405,7 @@ public class ControlSocket {
                     lines.append("session[\(i)].clients=\(session.clientCount)")
                     lines.append("session[\(i)].adb=\(session.adbConnected ? "yes" : "no")")
                     lines.append("session[\(i)].capture_active=\(session.capture != nil ? "yes" : "no")")
+                    lines.append("session[\(i)].input_server=\(session.inputServer?.running == true ? "running" : "stopped")")
                     if let cap = session.capture {
                         lines.append("session[\(i)].capture_frames=\(cap.frameCount)")
                         lines.append("session[\(i)].capture_skipped=\(cap.skippedFrames)")

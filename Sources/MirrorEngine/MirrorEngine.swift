@@ -536,6 +536,13 @@ public class MirrorEngine: ObservableObject {
                     hostPort: session.port
                 )
                 if tunnelOK {
+                    // Input tunnel — non-blocking; touch disabled if this fails
+                    let inputOK = ADBBridge.setupReverseTunnel(
+                        serial: session.device.serial,
+                        devicePort: INPUT_PORT,
+                        hostPort: INPUT_PORT
+                    )
+                    if !inputOK { NSLog("[ADB] Input tunnel failed for %@ — touch disabled", session.device.serial) }
                     ADBBridge.launchApp(serial: session.device.serial)
                     NSLog("[ADB] Reconnected %@", session.device.serial)
                 }

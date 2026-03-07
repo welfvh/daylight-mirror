@@ -22,6 +22,7 @@ public class DeviceSession: Identifiable {
     private(set) var tcpServer: TCPServer?
     private(set) var capture: ScreenCapture?
     private(set) var compositorPacer: CompositorPacer?
+    private(set) var inputServer: InputServer?
     public private(set) var adbConnected: Bool = false
 
     // Stats — pushed to MirrorEngine via callbacks
@@ -87,7 +88,16 @@ public class DeviceSession: Identifiable {
         tcp.start()
         tcpServer = tcp
 
-        // 5. Screen capture targeting this session's virtual display
+        // 5. Input server — receives touch events from the device, injects as Mac cursor
+        do {
+            let input = try InputServer(port: INPUT_PORT, targetDisplayID: displayManager!.displayID)
+            input.start()
+            inputServer = input
+        } catch {
+            NSLog("[Session:%@] Input server failed to start: %@ — touch disabled", device.serial, "\(error)")
+        }
+
+        // 7. Screen capture targeting this session's virtual display
         let cap = ScreenCapture(
             tcpServer: tcp, wsServer: wsServer,
             targetDisplayID: displayManager!.displayID,
@@ -111,7 +121,7 @@ public class DeviceSession: Identifiable {
         capture = cap
         try await cap.start()
 
-        // 6. ADB: install APK if needed, set up tunnel, launch app
+        // 8. ADB: install APK if needed, set up tunnel, launch app
         await setupADB()
 
         NSLog("[Session:%@] Started — %@, %dx%d, port %d, %@",
@@ -140,7 +150,12 @@ public class DeviceSession: Identifiable {
             // Tunnel: device's localhost:8888 → Mac's session port
             let tunnelOK = ADBBridge.setupReverseTunnel(serial: serial, devicePort: TCP_PORT, hostPort: port)
             if tunnelOK {
-                NSLog("[Session:%@] Tunnel established (device:8888 → host:%d)", serial, port)
+                NSLog("[Session:%@] Stream tunnel established (device:8888 → host:%d)", serial, port)
+                // Input tunnel — non-blocking; touch disabled if this fails but mirroring continues
+                let inputTunnelOK = ADBBridge.setupReverseTunnel(serial: serial, devicePort: INPUT_PORT, hostPort: INPUT_PORT)
+                if !inputTunnelOK {
+                    NSLog("[Session:%@] WARNING: Input tunnel failed — touch disabled", serial)
+                }
                 ADBBridge.launchApp(serial: serial, forceRestart: true)
                 adbConnected = true
                 return
@@ -163,6 +178,9 @@ public class DeviceSession: Identifiable {
         await capture?.stop()
         capture = nil
 
+        inputServer?.stop()
+        inputServer = nil
+
         tcpServer?.stop()
         tcpServer = nil
 
@@ -170,6 +188,7 @@ public class DeviceSession: Identifiable {
 
         if adbConnected {
             ADBBridge.removeReverseTunnel(serial: device.serial, devicePort: TCP_PORT)
+            ADBBridge.removeReverseTunnel(serial: device.serial, devicePort: INPUT_PORT)
             adbConnected = false
         }
 

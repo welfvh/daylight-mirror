@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -23,11 +24,24 @@ import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.io.OutputStream
+import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.LinkedBlockingQueue
 
 class MirrorActivity : Activity() {
 
     companion object {
         init { System.loadLibrary("mirror") }
+
+        // Touch input protocol constants — must match InputServer.swift
+        const val INPUT_PORT = 8892
+        const val INPUT_TOUCH_DOWN: Byte = 0x01
+        const val INPUT_TOUCH_MOVE: Byte = 0x02
+        const val INPUT_TOUCH_UP: Byte = 0x03
+        const val INPUT_SCROLL: Byte = 0x04
+        val MAGIC_INPUT = byteArrayOf(0xDA.toByte(), 0x70.toByte())
     }
 
     private external fun nativeStart(surface: Surface, host: String, port: Int)
@@ -41,6 +55,11 @@ class MirrorActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isConnected = false
     private var pendingDisconnect: Runnable? = null
+    private var touchSender: TouchSender? = null
+
+    // Previous touch position for computing scroll deltas
+    private var prevScrollX = 0f
+    private var prevScrollY = 0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,10 +127,47 @@ class MirrorActivity : Activity() {
             start()
         }
 
+        // Touch input — capture taps, drags, and two-finger scrolls, send to Mac via InputServer
+        surfaceView.setOnTouchListener { view, event ->
+            val normX = event.x / view.width
+            val normY = event.y / view.height
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    prevScrollX = event.x
+                    prevScrollY = event.y
+                    sendTouchPacket(INPUT_TOUCH_DOWN, normX, normY, 0f, 0f, 0)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (event.pointerCount >= 2) {
+                        // Two-finger scroll: compute delta from previous position
+                        val dx = (event.x - prevScrollX) / view.width
+                        val dy = (event.y - prevScrollY) / view.height
+                        prevScrollX = event.x
+                        prevScrollY = event.y
+                        sendTouchPacket(INPUT_SCROLL, normX, normY, dx, dy, 0)
+                    } else {
+                        sendTouchPacket(INPUT_TOUCH_MOVE, normX, normY, 0f, 0f, 0)
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    sendTouchPacket(INPUT_TOUCH_UP, normX, normY, 0f, 0f, 0)
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    // Second finger down — start scroll mode, reset delta tracking
+                    prevScrollX = event.x
+                    prevScrollY = event.y
+                }
+            }
+            true
+        }
+
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 holder.surface.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                 nativeStart(holder.surface, "127.0.0.1", 8888)
+                // Start touch input sender — connects to Mac's InputServer via ADB tunnel
+                touchSender = TouchSender("127.0.0.1", INPUT_PORT).also { it.start() }
             }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -124,6 +180,8 @@ class MirrorActivity : Activity() {
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
+                touchSender?.stop()
+                touchSender = null
                 nativeStop()
             }
         })
@@ -233,6 +291,81 @@ class MirrorActivity : Activity() {
                 controller.systemBarsBehavior =
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
+        }
+    }
+
+    override fun onDestroy() {
+        touchSender?.stop()
+        touchSender = null
+        super.onDestroy()
+    }
+
+    /// Build and enqueue a 23-byte touch input packet for sending to the Mac.
+    private fun sendTouchPacket(type: Byte, x: Float, y: Float, dx: Float, dy: Float, pointerId: Int) {
+        val buf = ByteBuffer.allocate(23).order(ByteOrder.LITTLE_ENDIAN)
+        buf.put(MAGIC_INPUT)
+        buf.put(type)
+        buf.putFloat(x)
+        buf.putFloat(y)
+        buf.putFloat(dx)
+        buf.putFloat(dy)
+        buf.putInt(pointerId)
+        touchSender?.send(buf.array())
+    }
+
+    /// Background thread that maintains a TCP connection to the Mac's InputServer
+    /// and drains a blocking queue of touch packets. Reconnects automatically on failure.
+    inner class TouchSender(private val host: String, private val port: Int) {
+        private val queue = LinkedBlockingQueue<ByteArray>()
+        @Volatile private var running = false
+        private var thread: Thread? = null
+
+        fun start() {
+            running = true
+            thread = Thread({
+                while (running) {
+                    var socket: Socket? = null
+                    var output: OutputStream? = null
+                    try {
+                        socket = Socket(host, port)
+                        socket.tcpNoDelay = true
+                        output = socket.getOutputStream()
+                        android.util.Log.i("DaylightMirror", "TouchSender connected to $host:$port")
+
+                        while (running) {
+                            val packet = queue.take()
+                            output.write(packet)
+                            output.flush()
+                        }
+                    } catch (e: InterruptedException) {
+                        // stop() was called
+                        break
+                    } catch (e: Exception) {
+                        android.util.Log.w("DaylightMirror", "TouchSender error: ${e.message}")
+                        // Clear stale packets before reconnecting
+                        queue.clear()
+                    } finally {
+                        try { output?.close() } catch (_: Exception) {}
+                        try { socket?.close() } catch (_: Exception) {}
+                    }
+                    // Wait before reconnect attempt
+                    if (running) {
+                        try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
+                    }
+                }
+            }, "TouchSender").also { it.isDaemon = true }
+            thread?.start()
+        }
+
+        fun send(packet: ByteArray) {
+            if (running) queue.offer(packet)
+        }
+
+        fun stop() {
+            running = false
+            thread?.interrupt()
+            thread = null
+            queue.clear()
         }
     }
 }
