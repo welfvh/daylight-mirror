@@ -50,7 +50,10 @@ public class MirrorEngine: ObservableObject {
     @Published public var updateURL: String? = nil
     /// Resolution preference for DC-1 devices.
     @Published public var resolution: DisplayResolution {
-        didSet { UserDefaults.standard.set(resolution.rawValue, forKey: "resolution") }
+        didSet {
+            UserDefaults.standard.set(resolution.rawValue, forKey: "resolution")
+            NSLog("[MirrorEngine] resolution changed: %@ → %@", oldValue.rawValue, resolution.rawValue)
+        }
     }
     /// Resolution preference for Boox Palma devices.
     @Published public var booxResolution: DisplayResolution {
