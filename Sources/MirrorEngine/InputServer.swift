@@ -224,7 +224,7 @@ public class InputServer {
             // Detect edge taps: top edge → menu bar (Ctrl+F2)
             if y < Self.edgeZoneThreshold {
                 edgeTapFired = true
-                injectKeyCombo(keyCode: 120, flags: .maskControl)  // Ctrl+F2
+                injectKeyCombo(keyCode: 118, flags: .maskControl)  // Ctrl+F4
                 break
             }
             edgeTapFired = false
