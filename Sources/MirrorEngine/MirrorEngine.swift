@@ -561,14 +561,14 @@ public class MirrorEngine: ObservableObject {
     // MARK: - Sleep Prevention (Clamshell Mode)
 
     /// Start caffeinate to prevent sleep including lid-close.
-    /// Flags: -d (display), -i (idle), -m (disk), -s (system, AC only).
-    /// caffeinate is the only reliable way to prevent lid-close sleep when
-    /// there's no real external display — IOPMAssertions alone aren't enough.
+    /// Flags: -d (display), -i (idle). The virtual display satisfies macOS's
+    /// "external display present" check for clamshell mode, and these assertions
+    /// prevent the system from sleeping when the lid closes.
     private func createSleepAssertion() {
         guard caffeinateProcess == nil else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
-        process.arguments = ["-dims"]
+        process.arguments = ["-di"]
         do {
             try process.run()
             caffeinateProcess = process

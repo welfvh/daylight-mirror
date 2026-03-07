@@ -1030,7 +1030,7 @@ struct MirrorMenuView: View {
                     Text("Keep Mac awake with lid closed?")
                         .font(.caption.weight(.medium))
                 }
-                Text("Higher battery usage — keep plugged in.\nNo automatic screen lock.")
+                Text("Higher battery usage while on battery.\nNo automatic screen lock.")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
