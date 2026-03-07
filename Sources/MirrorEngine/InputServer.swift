@@ -33,6 +33,12 @@ public class InputServer {
     /// Prevents accidental text selection when the user just wants to place the cursor.
     private static let tapDeadzonePoints: CGFloat = 8.0
 
+    // Edge zones: normalized Y threshold for detecting top/bottom screen edge taps.
+    // Tapping the very top edge triggers Ctrl+F2 (menu bar).
+    private static let edgeZoneThreshold: Float = 0.015  // ~1.5% of screen height
+    /// Whether the current touch started in an edge zone (suppresses normal mouse events)
+    private var edgeTapFired = false
+
     // Scroll state: track gesture phases so macOS treats events as trackpad input
     // and provides native momentum, rubber-banding, etc. automatically.
     private var scrollGestureActive = false
@@ -215,6 +221,13 @@ public class InputServer {
 
         switch type {
         case INPUT_TOUCH_DOWN:
+            // Detect edge taps: top edge → menu bar (Ctrl+F2)
+            if y < Self.edgeZoneThreshold {
+                edgeTapFired = true
+                injectKeyCombo(keyCode: 120, flags: .maskControl)  // Ctrl+F2
+                break
+            }
+            edgeTapFired = false
             mouseDown = true
             dragStarted = false
             scrolledDuringTouch = false
@@ -224,6 +237,7 @@ public class InputServer {
             injectMouseMoved(at: point)
 
         case INPUT_TOUCH_MOVE:
+            if edgeTapFired { break }
             lastMouseLocation = point
             if mouseDown {
                 if !dragStarted {
@@ -243,6 +257,7 @@ public class InputServer {
             }
 
         case INPUT_TOUCH_UP:
+            if edgeTapFired { edgeTapFired = false; break }
             if scrolledDuringTouch {
                 // This touch became a scroll gesture — no mouse events
             } else if mouseDown && !dragStarted {
@@ -289,6 +304,16 @@ public class InputServer {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
         event.post(tap: .cghidEventTap)
+    }
+
+    /// Inject a keyboard shortcut (key down + key up) with the given modifier flags.
+    private func injectKeyCombo(keyCode: CGKeyCode, flags: CGEventFlags) {
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else { return }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 
     private func injectMouseDragged(at point: CGPoint) {
