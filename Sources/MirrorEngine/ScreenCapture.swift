@@ -67,6 +67,10 @@ class ScreenCapture: NSObject {
     var lastContrastAmount: Double = 1.0           // Tracks when to rebuild LUT
     var sharpenAmount: Double = 1.0                // 0=none, 1=mild, 2=strong, 3=max
     var contrastAmount: Double = 1.0               // 1.0=off, >1=enhanced
+    /// Atomic flag to prevent handleFrame() from accessing deallocated buffers during stop().
+    /// Set before CGDisplayStreamStop, checked at top of handleFrame().
+    private var isStopped: Bool = false
+    private let stoppedLock = NSLock()
     var frameWidth: Int = 0
     var frameHeight: Int = 0
     var pixelCount: Int = 0
@@ -103,6 +107,8 @@ class ScreenCapture: NSObject {
     }
 
     func start() async throws {
+        isStopped = false
+
         // Pre-check screen recording permission
         guard CGPreflightScreenCaptureAccess() else {
             throw ScreenCaptureError.permissionDenied
@@ -188,12 +194,20 @@ class ScreenCapture: NSObject {
     }
 
     func stop() async {
+        // Set stopped flag BEFORE stopping the stream — prevents in-flight
+        // handleFrame() callbacks from accessing buffers we're about to deallocate.
+        stoppedLock.lock()
+        isStopped = true
+        stoppedLock.unlock()
+
         if let stream = displayStream {
             // Load stop function
             if let cg = cgHandle, let stopSym = dlsym(cg, "CGDisplayStreamStop") {
                 let stopFn = unsafeBitCast(stopSym, to: CGDisplayStreamStopFn.self)
                 _ = stopFn(stream)
             }
+            // Let any in-flight callbacks on captureQueue drain before releasing
+            try? await Task.sleep(for: .milliseconds(100))
             // Release the retained CFTypeRef
             let cfStream = Unmanaged<CFTypeRef>.fromOpaque(UnsafeRawPointer(stream))
             cfStream.release()
@@ -216,6 +230,12 @@ class ScreenCapture: NSObject {
         // Status codes:
         // 0 = FrameComplete, 1 = FrameIdle, 2 = FrameBlank, 3 = Stopped
         guard status == 0, let surface = surface else { return }
+
+        // Check stopped flag to avoid accessing deallocated buffers (#49)
+        stoppedLock.lock()
+        let shouldStop = isStopped
+        stoppedLock.unlock()
+        guard !shouldStop else { return }
 
         let t0 = CACurrentMediaTime()
 
