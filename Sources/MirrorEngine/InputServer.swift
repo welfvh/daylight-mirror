@@ -224,7 +224,7 @@ public class InputServer {
             // Detect edge taps: top edge → menu bar (Ctrl+F2)
             if y < Self.edgeZoneThreshold {
                 edgeTapFired = true
-                injectKeyCombo(keyCode: 118, flags: .maskControl)  // Ctrl+F4
+                activateMenuBar()
                 break
             }
             edgeTapFired = false
@@ -304,6 +304,16 @@ public class InputServer {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                    mouseCursorPosition: point, mouseButton: .left) else { return }
         event.post(tap: .cghidEventTap)
+    }
+
+    /// Activate the menu bar of the frontmost app via Accessibility/AppleScript.
+    /// More reliable than keyboard shortcuts which require System Settings toggles.
+    private func activateMenuBar() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let script = NSAppleScript(source:
+                "tell application \"System Events\" to tell (first process whose frontmost is true) to click menu bar 1")
+            script?.executeAndReturnError(nil)
+        }
     }
 
     /// Inject a keyboard shortcut (key down + key up) with the given modifier flags.
