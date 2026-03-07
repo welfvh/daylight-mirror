@@ -63,10 +63,12 @@ class ScreenCapture: NSObject {
     var deltaBuffer: UnsafeMutablePointer<UInt8>?
     var compressedBuffer: UnsafeMutablePointer<CChar>?
     var sharpenTemp: UnsafeMutablePointer<UInt8>?  // Pre-sharpen greyscale buffer
-    var contrastLUT: [UInt8] = Array(0...255)       // Precomputed contrast LUT
+    var contrastLUT: [UInt8] = Array(0...255)       // Combined gamma+contrast LUT
     var lastContrastAmount: Double = 1.0           // Tracks when to rebuild LUT
+    var lastGammaAmount: Double = 1.0              // Tracks when to rebuild LUT
     var sharpenAmount: Double = 1.0                // 0=none, 1=mild, 2=strong, 3=max
     var contrastAmount: Double = 1.0               // 1.0=off, >1=enhanced
+    var gammaAmount: Double = 1.2                  // Gamma correction for reflective displays
     /// Atomic flag to prevent handleFrame() from accessing deallocated buffers during stop().
     /// Set before CGDisplayStreamStop, checked at top of handleFrame().
     private var isStopped: Bool = false
@@ -303,14 +305,30 @@ class ScreenCapture: NSObject {
             )
         }
 
-        // Contrast enhancement (independent of sharpening).
+        // Combined gamma + contrast enhancement via single precomputed LUT.
+        // Gamma correction adjusts midtones for the reflective e-ink panel
+        // (transfer curve ~1.0-1.5 vs 2.2 for transmissive LCDs).
+        // Contrast stretch pushes light borders darker and dark text blacker.
         // LUT rebuilt lazily on capture thread to avoid data race with main thread.
-        if contrastAmt > 1.01 {
-            if contrastAmt != lastContrastAmount {
+        let gammaAmt = gammaAmount
+        let needsLUT = contrastAmt > 1.01 || gammaAmt > 1.01
+        if needsLUT {
+            if contrastAmt != lastContrastAmount || gammaAmt != lastGammaAmount {
                 contrastLUT = (0..<256).map { i in
-                    UInt8(max(0, min(255, Int(128.0 + contrastAmt * (Double(i) - 128.0)))))
+                    // Apply gamma first: corrected = pow(input/255, gamma) * 255
+                    var val = Double(i) / 255.0
+                    if gammaAmt > 1.01 {
+                        val = pow(val, 1.0 / gammaAmt)  // Inverse gamma brightens midtones
+                    }
+                    val = val * 255.0
+                    // Then apply contrast stretch: output = 128 + contrast * (input - 128)
+                    if contrastAmt > 1.01 {
+                        val = 128.0 + contrastAmt * (val - 128.0)
+                    }
+                    return UInt8(max(0, min(255, Int(val))))
                 }
                 lastContrastAmount = contrastAmt
+                lastGammaAmount = gammaAmt
             }
             let lut = contrastLUT
             for i in 0..<pixelCount { currentGray![i] = lut[Int(currentGray![i])] }

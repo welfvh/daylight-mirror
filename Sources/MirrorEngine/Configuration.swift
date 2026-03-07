@@ -16,8 +16,8 @@ let KEYFRAME_INTERVAL: Int = 60
 // Image processing for e-ink/greyscale displays.
 // macOS font smoothing produces subpixel-antialiased text that looks fuzzy when
 // converted to greyscale. Two independent post-processing knobs counteract this:
-//   sharpenAmount (0.0-3.0): spatial sharpening via Laplacian kernel
-//   contrastAmount (1.0-2.0): linear contrast stretch around midpoint
+//   sharpenAmount (0.0-3.0): spatial sharpening via Laplacian kernel (default 1.5)
+//   contrastAmount (1.0-1.8): linear contrast stretch around midpoint (default 1.2)
 
 // Resolution presets for the Daylight DC-1 (1600x1200 native, 4:3 landscape / 3:4 portrait).
 // Cozy variants use HiDPI (2x): macOS renders at half logical points with full backing

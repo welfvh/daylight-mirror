@@ -707,13 +707,34 @@ struct MirrorMenuView: View {
                                 get: { engine.sharpenAmount },
                                 set: { engine.sharpenAmount = $0 }
                             ),
-                            in: 0...1.5,
+                            in: 0...3.0,
                             step: 0.1
                         )
                         Image(systemName: "diamond")
                             .font(.caption2)
                     }
                     Text("Sharpen: \(String(format: "%.1f", engine.sharpenAmount))")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
+
+                // Contrast slider
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Image(systemName: "circle.lefthalf.filled")
+                            .font(.caption2)
+                        Slider(
+                            value: Binding(
+                                get: { engine.contrastAmount },
+                                set: { engine.contrastAmount = $0 }
+                            ),
+                            in: 1.0...1.8,
+                            step: 0.1
+                        )
+                        Image(systemName: "circle.righthalf.filled")
+                            .font(.caption2)
+                    }
+                    Text("Contrast: \(String(format: "%.1f", engine.contrastAmount))")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
                 }

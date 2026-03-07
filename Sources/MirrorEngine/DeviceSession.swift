@@ -49,7 +49,7 @@ public class DeviceSession: Identifiable {
     }
 
     /// Start the full pipeline: virtual display → capture → TCP server → ADB tunnel → launch app.
-    func start(wsServer: WebSocketServer?, sharpenAmount: Double, contrastAmount: Double) async throws {
+    func start(wsServer: WebSocketServer?, sharpenAmount: Double, contrastAmount: Double, gammaAmount: Double) async throws {
         let w = resolution.width
         let h = resolution.height
         let displayName = device.deviceFamily.rawValue
@@ -95,6 +95,7 @@ public class DeviceSession: Identifiable {
         )
         cap.sharpenAmount = sharpenAmount
         cap.contrastAmount = contrastAmount
+        cap.gammaAmount = gammaAmount
         cap.onStats = { [weak self] fps, bw, frameKB, total, grey, compress, jitter, skipped in
             guard let self else { return }
             self.fps = fps
@@ -179,5 +180,10 @@ public class DeviceSession: Identifiable {
     /// Update contrast amount on the live capture stream.
     func updateContrast(_ amount: Double) {
         capture?.contrastAmount = amount
+    }
+
+    /// Update gamma correction on the live capture stream.
+    func updateGamma(_ amount: Double) {
+        capture?.gammaAmount = amount
     }
 }

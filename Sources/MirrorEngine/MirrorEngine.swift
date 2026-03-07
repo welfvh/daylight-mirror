@@ -44,6 +44,14 @@ public class MirrorEngine: ObservableObject {
             UserDefaults.standard.set(contrastAmount, forKey: "contrastAmount")
         }
     }
+    /// Gamma correction for reflective e-ink displays (~1.0-1.5 vs 2.2 for transmissive LCDs).
+    /// Values > 1.0 brighten midtones, improving definition on the DC-1's reflective panel.
+    @Published public var gammaAmount: Double = 1.2 {
+        didSet {
+            for session in sessions { session.updateGamma(gammaAmount) }
+            UserDefaults.standard.set(gammaAmount, forKey: "gammaAmount")
+        }
+    }
     @Published public var fontSmoothingDisabled: Bool = false
     @Published public var deviceDetected: Bool = false
     @Published public var updateVersion: String? = nil
@@ -85,9 +93,11 @@ public class MirrorEngine: ObservableObject {
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
-        self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.0
+        self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.5
         let savedContrast = UserDefaults.standard.double(forKey: "contrastAmount")
-        self.contrastAmount = savedContrast > 0 ? savedContrast : 1.0
+        self.contrastAmount = savedContrast > 0 ? savedContrast : 1.2
+        let savedGamma = UserDefaults.standard.double(forKey: "gammaAmount")
+        self.gammaAmount = savedGamma > 0 ? savedGamma : 1.2
         if UserDefaults.standard.object(forKey: "autoMirrorEnabled") != nil {
             self.autoMirrorEnabled = UserDefaults.standard.bool(forKey: "autoMirrorEnabled")
         }
@@ -343,7 +353,8 @@ public class MirrorEngine: ObservableObject {
             try await session.start(
                 wsServer: wsServer,
                 sharpenAmount: sharpenAmount,
-                contrastAmount: contrastAmount
+                contrastAmount: contrastAmount,
+                gammaAmount: gammaAmount
             )
         } catch {
             NSLog("[Engine] Session %@ failed: %@", session.device.serial, error.localizedDescription)
