@@ -316,7 +316,7 @@ class ScreenCapture: NSObject {
         }
 
         // Combined gamma + contrast enhancement via single precomputed LUT.
-        // Gamma correction adjusts midtones for the reflective e-ink panel
+        // Gamma correction adjusts midtones for the reflective paper display
         // (transfer curve ~1.0-1.5 vs 2.2 for transmissive LCDs).
         // Contrast stretch pushes light borders darker and dark text blacker.
         // LUT rebuilt lazily on capture thread to avoid data race with main thread.

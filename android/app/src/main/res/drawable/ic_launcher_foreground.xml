@@ -4,7 +4,7 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Simple monitor/display icon for e-ink aesthetic -->
+    <!-- Simple monitor/display icon for reflective display aesthetic -->
     <!-- Screen outline -->
     <path
         android:fillColor="#000000"

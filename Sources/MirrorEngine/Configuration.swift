@@ -13,7 +13,7 @@ let TARGET_FPS: Int = 60  // DC-1 panel supports up to 120Hz; 60fps viable with 
 let JPEG_QUALITY: CGFloat = 0.8
 let KEYFRAME_INTERVAL: Int = 60
 
-// Image processing for e-ink/greyscale displays.
+// Image processing for reflective paper displays (greyscale).
 // macOS font smoothing produces subpixel-antialiased text that looks fuzzy when
 // converted to greyscale. Two independent post-processing knobs counteract this:
 //   sharpenAmount (0.0-3.0): spatial sharpening via Laplacian kernel (default 1.5)
@@ -107,23 +107,34 @@ let WARMTH_STEP: Int = 20
 
 // MARK: - Display Profiles
 
-/// Bundles sharpen, contrast, and gamma into named presets for the DC-1 e-ink panel.
-/// "E-ink Crisp" is the optimized default. "Balanced" is gentler. "Custom" unlocks sliders.
+/// Bundles sharpen, contrast, and gamma into named presets for the DC-1 reflective panel.
+/// "Crisp Paper" is the optimized default. "Balanced" is gentler. "Custom" unlocks sliders.
 public enum DisplayProfile: String, CaseIterable, Identifiable {
-    case einkCrisp = "E-ink Crisp"
+    case crispPaper = "Crisp Paper"
     case balanced  = "Balanced"
     case custom    = "Custom"
 
     public var id: String { rawValue }
 
     public var sharpen: Double {
-        switch self { case .einkCrisp: 1.5; case .balanced: 0.5; case .custom: 0 }
+        switch self { case .crispPaper: 1.5; case .balanced: 0.5; case .custom: 0 }
     }
     public var contrast: Double {
-        switch self { case .einkCrisp: 1.2; case .balanced: 1.0; case .custom: 1.0 }
+        switch self { case .crispPaper: 1.2; case .balanced: 1.0; case .custom: 1.0 }
     }
     public var gamma: Double {
-        switch self { case .einkCrisp: 1.2; case .balanced: 1.0; case .custom: 1.0 }
+        switch self { case .crispPaper: 1.2; case .balanced: 1.0; case .custom: 1.0 }
+    }
+
+    /// Migration: map old "E-ink Crisp" raw value to the renamed case.
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "Crisp Paper": self = .crispPaper
+        case "E-ink Crisp": self = .crispPaper  // v1.6 → v1.7 migration
+        case "Balanced": self = .balanced
+        case "Custom": self = .custom
+        default: return nil
+        }
     }
 }
 

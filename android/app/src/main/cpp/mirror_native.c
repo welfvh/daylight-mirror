@@ -65,7 +65,7 @@ static uint32_t g_frame_w = DEFAULT_FRAME_W;
 static uint32_t g_frame_h = DEFAULT_FRAME_H;
 // Actual surface dimensions from surfaceChanged — the real window size after
 // any orientation change. Some devices (Boox Palma) claim to rotate but the
-// e-ink framebuffer stays portrait, so we use this to detect the truth.
+// DC-1 framebuffer stays portrait, so we use this to detect the truth.
 static uint32_t g_surface_w = 0;
 static uint32_t g_surface_h = 0;
 static uint32_t g_pixel_count = DEFAULT_FRAME_W * DEFAULT_FRAME_H;

@@ -6,7 +6,7 @@
 // considers static content "clean" and skips recompositing.
 //
 // The pixel toggles between #000000 and #010000 (1/255 red channel diff) —
-// completely imperceptible on any display, especially e-ink.
+// completely imperceptible on any display, especially reflective displays.
 //
 // Uses CADisplayLink (macOS 14+) for vsync-aligned timing. The 4x4 dirty
 // region forces WindowServer to recomposite the target display every frame.

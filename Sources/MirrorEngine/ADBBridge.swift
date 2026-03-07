@@ -19,7 +19,7 @@ public struct ConnectedDevice: Identifiable {
 
     /// Infer device family from the model string reported by ADB.
     /// Currently identifies DC-1 by exclusion; everything else is `.other`.
-    /// Future: detect specific e-ink tablets and auto-configure resolution.
+    /// Future: detect specific reflective displays and auto-configure resolution.
     public var deviceFamily: DeviceFamily {
         let m = model.lowercased()
         if m.contains("dc-1") || m.contains("daylight") || m.contains("dc1") {

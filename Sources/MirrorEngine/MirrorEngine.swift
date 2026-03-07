@@ -13,7 +13,7 @@ public class MirrorEngine: ObservableObject {
     // RELEASE: Bump this BEFORE creating a GitHub release. Also upload both
     // DaylightMirror-vX.Y.dmg (versioned) and DaylightMirror.dmg (stable name for Gumroad link)
     // to the release. Update Homebrew cask in welfvh/homebrew-tap with new version + sha256.
-    public static let appVersion = "1.6.1"
+    public static let appVersion = "1.7.0"
 
     @Published public var status: MirrorStatus = .idle
     @Published public var fps: Double = 0
@@ -48,7 +48,7 @@ public class MirrorEngine: ObservableObject {
             if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
         }
     }
-    /// Gamma correction for reflective e-ink displays (~1.0-1.5 vs 2.2 for transmissive LCDs).
+    /// Gamma correction for reflective paper displays (~1.0-1.5 vs 2.2 for transmissive LCDs).
     /// Values > 1.0 brighten midtones, improving definition on the DC-1's reflective panel.
     @Published public var gammaAmount: Double = 1.2 {
         didSet {
@@ -59,7 +59,7 @@ public class MirrorEngine: ObservableObject {
     }
     /// Display profile bundles sharpen+contrast+gamma. Selecting a preset applies its values;
     /// manually adjusting any slider switches to "Custom".
-    @Published public var displayProfile: DisplayProfile = .einkCrisp {
+    @Published public var displayProfile: DisplayProfile = .crispPaper {
         didSet {
             UserDefaults.standard.set(displayProfile.rawValue, forKey: "displayProfile")
             if displayProfile != .custom {
@@ -128,7 +128,7 @@ public class MirrorEngine: ObservableObject {
         let savedGamma = UserDefaults.standard.double(forKey: "gammaAmount")
         self.gammaAmount = savedGamma > 0 ? savedGamma : 1.2
         let savedProfile = UserDefaults.standard.string(forKey: "displayProfile") ?? ""
-        self.displayProfile = DisplayProfile(rawValue: savedProfile) ?? .einkCrisp
+        self.displayProfile = DisplayProfile(rawValue: savedProfile) ?? .crispPaper
         if UserDefaults.standard.object(forKey: "autoMirrorEnabled") != nil {
             self.autoMirrorEnabled = UserDefaults.standard.bool(forKey: "autoMirrorEnabled")
         }
