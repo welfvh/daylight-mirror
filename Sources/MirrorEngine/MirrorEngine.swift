@@ -8,6 +8,7 @@
 
 import Foundation
 import AppKit
+import IOKit.pwr_mgt
 
 public class MirrorEngine: ObservableObject {
     // RELEASE: Bump this BEFORE creating a GitHub release. Also upload both
@@ -103,6 +104,22 @@ public class MirrorEngine: ObservableObject {
     @Published public var autoDimMac: Bool = true {
         didSet { UserDefaults.standard.set(autoDimMac, forKey: "autoDimMac") }
     }
+    /// When true, prevent system sleep while mirroring (enables clamshell/lid-closed use).
+    /// Creates an IOPMAssertion that keeps the Mac awake even with the lid closed.
+    @Published public var clamshellModeEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(clamshellModeEnabled, forKey: "clamshellModeEnabled")
+            if clamshellModeEnabled && status == .running {
+                createSleepAssertion()
+            } else if !clamshellModeEnabled {
+                releaseSleepAssertion()
+            }
+        }
+    }
+    /// IOPMAssertion ID for preventing system sleep. 0 = no active assertion.
+    private var sleepAssertionID: IOPMAssertionID = 0
+    /// Whether a sleep assertion is currently held.
+    private var hasSleepAssertion: Bool = false
 
     public init() {
         // Load saved resolution — validate it's a known preset, fall back to Sharp.
@@ -134,6 +151,9 @@ public class MirrorEngine: ObservableObject {
         }
         if UserDefaults.standard.object(forKey: "autoDimMac") != nil {
             self.autoDimMac = UserDefaults.standard.bool(forKey: "autoDimMac")
+        }
+        if UserDefaults.standard.object(forKey: "clamshellModeEnabled") != nil {
+            self.clamshellModeEnabled = UserDefaults.standard.bool(forKey: "clamshellModeEnabled")
         }
         NSLog("[MirrorEngine] init, resolution: %@, mode: %@, sharpen: %.1f",
               resolution.rawValue, displayMode.rawValue, sharpenAmount)
@@ -357,6 +377,8 @@ public class MirrorEngine: ObservableObject {
         apkInstallStatus = ""
         status = .running
 
+        if clamshellModeEnabled { createSleepAssertion() }
+
         let sessionSummary = sessions.map { "\($0.device.model)@\($0.port):\($0.resolution.rawValue)" }
         print("---")
         print("Sessions: \(sessionSummary.joined(separator: ", "))")
@@ -446,6 +468,8 @@ public class MirrorEngine: ObservableObject {
         if status == .waitingForDevice { status = .idle; return }
         DispatchQueue.main.async { self.status = .stopping }
 
+        releaseSleepAssertion()
+
         if let saved = savedMacBrightness {
             MacBrightness.set(saved)
             savedMacBrightness = nil
@@ -533,6 +557,35 @@ public class MirrorEngine: ObservableObject {
             brightness = dc.currentBrightness
             backlightOn = dc.backlightOn
         }
+    }
+
+    // MARK: - Sleep Prevention (Clamshell Mode)
+
+    /// Create a power assertion that prevents system sleep, enabling lid-closed use.
+    private func createSleepAssertion() {
+        guard !hasSleepAssertion else { return }
+        let reason = "Daylight Mirror is actively mirroring to an external display" as CFString
+        let result = IOPMAssertionCreateWithName(
+            kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            reason,
+            &sleepAssertionID
+        )
+        if result == kIOReturnSuccess {
+            hasSleepAssertion = true
+            NSLog("[Clamshell] Sleep assertion created (ID: %d)", sleepAssertionID)
+        } else {
+            NSLog("[Clamshell] Failed to create sleep assertion: %d", result)
+        }
+    }
+
+    /// Release the sleep assertion, allowing normal sleep behavior.
+    private func releaseSleepAssertion() {
+        guard hasSleepAssertion else { return }
+        IOPMAssertionRelease(sleepAssertionID)
+        hasSleepAssertion = false
+        sleepAssertionID = 0
+        NSLog("[Clamshell] Sleep assertion released")
     }
 
     public func setFontSmoothing(enabled: Bool) {

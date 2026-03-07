@@ -559,6 +559,7 @@ struct MirrorMenuView: View {
     // MARK: - Running View
 
     @State private var showDetailedStats = false
+    @State private var showClamshellConfirm = false
 
     /// Whether any DC-1 device is among the active sessions.
     private var hasDC1: Bool { engine.sessions.contains { $0.device.deviceFamily == .daylightDC1 } }
@@ -693,6 +694,36 @@ struct MirrorMenuView: View {
                         .toggleStyle(.switch)
                         .controlSize(.small)
                         .labelsHidden()
+                }
+
+                HStack {
+                    Label {
+                        Text("Clamshell mode")
+                    } icon: {
+                        Image(systemName: "laptopcomputer.closed")
+                            .frame(width: 14, alignment: .center)
+                    }
+                    .font(.caption)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { engine.clamshellModeEnabled },
+                        set: { newValue in
+                            if newValue && !engine.clamshellModeEnabled {
+                                showClamshellConfirm = true
+                            } else {
+                                engine.clamshellModeEnabled = newValue
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                }
+                .alert("Keep Mac awake with lid closed?", isPresented: $showClamshellConfirm) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Enable") { engine.clamshellModeEnabled = true }
+                } message: {
+                    Text("While mirroring, your Mac won't sleep when you close the lid.\n\n• Higher battery usage — keep your Mac plugged in\n• No automatic screen lock — your Mac stays accessible")
                 }
 
                 Divider()
@@ -962,6 +993,36 @@ struct MirrorMenuView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .labelsHidden()
+        }
+
+        HStack {
+            Label {
+                Text("Clamshell mode")
+            } icon: {
+                Image(systemName: "laptopcomputer.closed")
+                    .frame(width: 14, alignment: .center)
+            }
+            .font(.caption)
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { engine.clamshellModeEnabled },
+                set: { newValue in
+                    if newValue && !engine.clamshellModeEnabled {
+                        showClamshellConfirm = true
+                    } else {
+                        engine.clamshellModeEnabled = newValue
+                    }
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .labelsHidden()
+        }
+        .alert("Keep Mac awake with lid closed?", isPresented: $showClamshellConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Enable") { engine.clamshellModeEnabled = true }
+        } message: {
+            Text("While mirroring, your Mac won't sleep when you close the lid.\n\n• Higher battery usage — keep your Mac plugged in\n• No automatic screen lock — your Mac stays accessible")
         }
 
         Divider()
