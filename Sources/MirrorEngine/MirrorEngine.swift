@@ -111,6 +111,16 @@ public class MirrorEngine: ObservableObject {
         self.resolution = loadedRes
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
+        // Migration: v1.7 introduced new defaults (sharpen 1.5, contrast 1.2, gamma 1.2).
+        // Old installs have sharpen=1.0, contrast=1.0, gamma=0.0 saved — override those.
+        let migrated = UserDefaults.standard.bool(forKey: "v1.7_defaults_migrated")
+        if !migrated {
+            UserDefaults.standard.removeObject(forKey: "sharpenAmount")
+            UserDefaults.standard.removeObject(forKey: "contrastAmount")
+            UserDefaults.standard.removeObject(forKey: "gammaAmount")
+            UserDefaults.standard.removeObject(forKey: "displayProfile")
+            UserDefaults.standard.set(true, forKey: "v1.7_defaults_migrated")
+        }
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
         self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.5
         let savedContrast = UserDefaults.standard.double(forKey: "contrastAmount")
