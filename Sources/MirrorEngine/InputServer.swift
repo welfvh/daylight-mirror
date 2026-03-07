@@ -23,11 +23,18 @@ public class InputServer {
     // Mouse state tracking
     private var mouseDown = false
     private var lastMouseLocation: CGPoint = .zero
+    /// Where the finger first touched — used for tap vs drag deadzone detection
+    private var touchDownLocation: CGPoint = .zero
+    /// Whether the finger has moved far enough from the initial touch to count as a drag
+    private var dragStarted = false
+    /// Deadzone in screen points — movement within this radius after touch-down is a tap, not a drag.
+    /// Prevents accidental text selection when the user just wants to place the cursor.
+    private static let tapDeadzonePoints: CGFloat = 8.0
 
     // Scroll acceleration: accumulate fractional remainders for smooth scrolling
     private var scrollRemainderX: CGFloat = 0
     private var scrollRemainderY: CGFloat = 0
-    private static let scrollSensitivity: CGFloat = 50.0
+    private static let scrollSensitivity: CGFloat = 800.0
 
     private var accessibilityWarned = false
 
@@ -182,21 +189,43 @@ public class InputServer {
         switch type {
         case INPUT_TOUCH_DOWN:
             mouseDown = true
+            dragStarted = false
+            touchDownLocation = point
             lastMouseLocation = point
-            injectMouseDown(at: point)
+            // Don't inject mouseDown yet — wait to see if this becomes a drag or stays a tap
+            injectMouseMoved(at: point)
 
         case INPUT_TOUCH_MOVE:
             lastMouseLocation = point
             if mouseDown {
+                if !dragStarted {
+                    // Check if finger moved past the deadzone threshold
+                    let dist = hypot(point.x - touchDownLocation.x, point.y - touchDownLocation.y)
+                    if dist < Self.tapDeadzonePoints {
+                        // Still in deadzone — don't drag, just absorb the movement
+                        break
+                    }
+                    // Past deadzone — commit to drag: send mouseDown at original location first
+                    dragStarted = true
+                    injectMouseDown(at: touchDownLocation)
+                }
                 injectMouseDragged(at: point)
             } else {
                 injectMouseMoved(at: point)
             }
 
         case INPUT_TOUCH_UP:
+            if mouseDown && !dragStarted {
+                // Never left the deadzone — this is a tap (click)
+                injectMouseDown(at: touchDownLocation)
+                injectMouseUp(at: touchDownLocation)
+            } else if mouseDown {
+                // Was dragging — release at current position
+                injectMouseUp(at: point)
+            }
             mouseDown = false
+            dragStarted = false
             lastMouseLocation = point
-            injectMouseUp(at: point)
 
         case INPUT_SCROLL:
             injectScroll(at: lastMouseLocation, dx: dx, dy: dy)
