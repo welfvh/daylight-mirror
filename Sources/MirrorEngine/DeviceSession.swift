@@ -119,10 +119,14 @@ public class DeviceSession: Identifiable {
               displayMode == .mirror ? "mirror" : "extended")
     }
 
-    /// Set up ADB connection: install APK, reverse tunnel, launch app.
+    /// Set up ADB connection: reset display override, install APK, reverse tunnel, launch app.
     private func setupADB() async {
         let serial = device.serial
         let maxAttempts = 3
+
+        // Reset display size override to get full physical panel resolution.
+        // Without this, the DC-1's 1184x1584 override causes scaling artifacts.
+        ADBBridge.resetDisplaySizeOverride(serial: serial)
 
         for attempt in 1...maxAttempts {
             // Auto-install bundled APK if needed

@@ -256,6 +256,16 @@ class ScreenCapture: NSObject {
         let baseAddress = IOSurfaceGetBaseAddress(surface)
         let rowBytes = IOSurfaceGetBytesPerRow(surface)
 
+        // Log actual IOSurface dimensions on first frame to verify CGDisplayStream
+        // is delivering full backing pixel resolution (critical for HiDPI modes).
+        if frameCount == 0 {
+            let surfW = IOSurfaceGetWidth(surface)
+            let surfH = IOSurfaceGetHeight(surface)
+            let surfBPP = IOSurfaceGetBytesPerElement(surface)
+            NSLog("[Capture] IOSurface: %dx%d, %d bpp, rowBytes=%d (expected %dx%d)",
+                  surfW, surfH, surfBPP, rowBytes, frameWidth, frameHeight)
+        }
+
         var srcBuffer = vImage_Buffer(
             data: baseAddress,
             height: vImagePixelCount(frameHeight),

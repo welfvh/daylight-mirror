@@ -312,6 +312,34 @@ struct ADBBridge {
         return nil
     }
 
+    /// Reset display size override so the app gets the full physical panel resolution.
+    /// The DC-1 ships with `display_size_forced=1184,1584` which steals 16px per axis,
+    /// causing 1600x1200 frames to be scaled to 1584x1184 — destroying 1:1 pixel mapping.
+    @discardableResult
+    static func resetDisplaySizeOverride(serial: String? = nil) -> Bool {
+        // Check current override
+        let checkPipe = Pipe()
+        guard let checkProcess = makeADBProcess(["shell", "wm", "size"], serial: serial) else { return false }
+        checkProcess.standardOutput = checkPipe
+        checkProcess.standardError = FileHandle.nullDevice
+        try? checkProcess.run()
+        checkProcess.waitUntilExit()
+        let sizeOutput = String(data: checkPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+        if sizeOutput.contains("Override") {
+            // Reset size override to physical resolution
+            guard let resetProcess = makeADBProcess(["shell", "wm", "size", "reset"], serial: serial) else { return false }
+            resetProcess.standardOutput = FileHandle.nullDevice
+            resetProcess.standardError = FileHandle.nullDevice
+            try? resetProcess.run()
+            resetProcess.waitUntilExit()
+            NSLog("[ADB] Reset display size override (was: %@)", sizeOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+            return resetProcess.terminationStatus == 0
+        }
+        NSLog("[ADB] No display size override to reset")
+        return true
+    }
+
     /// Launch the companion app on the specified device.
     /// When `forceRestart` is true, uses `-S` to stop any existing instance first.
     static func launchApp(serial: String? = nil, forceRestart: Bool = false) {

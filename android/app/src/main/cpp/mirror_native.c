@@ -129,12 +129,17 @@ static const char *k_vertex_shader_src =
     "    v_texcoord = a_texcoord;\n"
     "}\n";
 
+// Fragment shader with levels adjustment for e-ink crispness.
+// smoothstep(0.02, 0.98, grey) snaps near-black to pure black and near-white to
+// pure white, eliminating residual antialiasing grey that survived Mac-side processing.
+// This is free on the GPU — single ALU instruction per pixel.
 static const char *k_fragment_shader_src =
     "precision mediump float;\n"
     "varying vec2 v_texcoord;\n"
     "uniform sampler2D u_texture;\n"
     "void main() {\n"
     "    float grey = texture2D(u_texture, v_texcoord).r;\n"
+    "    grey = smoothstep(0.02, 0.98, grey);\n"
     "    gl_FragColor = vec4(grey, grey, grey, 1.0);\n"
     "}\n";
 
