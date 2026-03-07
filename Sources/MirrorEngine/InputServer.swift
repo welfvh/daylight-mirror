@@ -27,6 +27,8 @@ public class InputServer {
     private var touchDownLocation: CGPoint = .zero
     /// Whether the finger has moved far enough from the initial touch to count as a drag
     private var dragStarted = false
+    /// Set when a scroll event arrives during a touch — suppresses mouse up/click on finger lift
+    private var scrolledDuringTouch = false
     /// Deadzone in screen points — movement within this radius after touch-down is a tap, not a drag.
     /// Prevents accidental text selection when the user just wants to place the cursor.
     private static let tapDeadzonePoints: CGFloat = 8.0
@@ -211,6 +213,7 @@ public class InputServer {
         case INPUT_TOUCH_DOWN:
             mouseDown = true
             dragStarted = false
+            scrolledDuringTouch = false
             touchDownLocation = point
             lastMouseLocation = point
             // Don't inject mouseDown yet — wait to see if this becomes a drag or stays a tap
@@ -236,7 +239,9 @@ public class InputServer {
             }
 
         case INPUT_TOUCH_UP:
-            if mouseDown && !dragStarted {
+            if scrolledDuringTouch {
+                // This touch became a scroll gesture — no mouse events
+            } else if mouseDown && !dragStarted {
                 // Never left the deadzone — this is a tap (click)
                 injectMouseDown(at: touchDownLocation)
                 injectMouseUp(at: touchDownLocation)
@@ -246,9 +251,17 @@ public class InputServer {
             }
             mouseDown = false
             dragStarted = false
+            scrolledDuringTouch = false
             lastMouseLocation = point
 
         case INPUT_SCROLL:
+            // If a drag was in progress, release it before scrolling
+            if mouseDown && dragStarted {
+                injectMouseUp(at: lastMouseLocation)
+                dragStarted = false
+            }
+            scrolledDuringTouch = true
+            mouseDown = false
             injectScroll(at: lastMouseLocation, dx: dx, dy: dy)
 
         default:
