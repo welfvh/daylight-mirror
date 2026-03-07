@@ -559,6 +559,7 @@ struct MirrorMenuView: View {
     // MARK: - Running View
 
     @State private var showDetailedStats = false
+    @State private var showSpeedStats = false
     @State private var showClamshellConfirm = false
     @State private var showClamshellConfirmIdle = false
 
@@ -761,25 +762,44 @@ struct MirrorMenuView: View {
 
                 Divider()
 
-                // Stats
-                HStack {
-                    Label(String(format: "%.0f FPS", engine.fps), systemImage: "speedometer")
-                    Spacer()
-                    Text(String(format: "%.1f MB/s", engine.bandwidth))
-                        .foregroundStyle(.secondary)
+                // Collapsible speed/stats section
+                Button(action: { showSpeedStats.toggle() }) {
+                    HStack {
+                        Text("Speed")
+                        if !showSpeedStats {
+                            Text(String(format: "%.0f FPS", engine.fps))
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        Image(systemName: showSpeedStats ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.caption)
+                    .contentShape(Rectangle())
                 }
-                .font(.caption)
+                .buttonStyle(.plain)
 
-                VStack(spacing: 4) {
-                    statsRow("Frame size", "\(engine.frameSizeKB) KB")
-                    statsRow("Total frames", "\(engine.totalFrames)")
-                    statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
-                    statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
-                    statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 60.0) * 100))
+                if showSpeedStats {
+                    HStack {
+                        Label(String(format: "%.0f FPS", engine.fps), systemImage: "speedometer")
+                        Spacer()
+                        Text(String(format: "%.1f MB/s", engine.bandwidth))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+
+                    VStack(spacing: 4) {
+                        statsRow("Frame size", "\(engine.frameSizeKB) KB")
+                        statsRow("Total frames", "\(engine.totalFrames)")
+                        statsRow("Grey + sharpen", String(format: "%.1f ms", engine.greyMs))
+                        statsRow("LZ4 compress", String(format: "%.1f ms", engine.compressMs))
+                        statsRow("Frame budget", String(format: "%.0f%%", (engine.greyMs + engine.compressMs) / (1000.0 / 60.0) * 100))
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
             }
         }
 
@@ -994,7 +1014,7 @@ struct MirrorMenuView: View {
             // Inline confirmation — stays inside the menu bar window
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Image(systemName: "powersleep")
+                    Image(systemName: "cup.and.saucer")
                         .font(.caption)
                     Text("Keep Mac awake with lid closed?")
                         .font(.caption.weight(.medium))
@@ -1020,8 +1040,13 @@ struct MirrorMenuView: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
         } else {
             HStack {
-                Label("Clamshell mode", systemImage: "powersleep")
-                    .font(.caption)
+                Label {
+                    Text("Clamshell mode")
+                } icon: {
+                    Image(systemName: "cup.and.saucer")
+                        .frame(width: 14, alignment: .center)
+                }
+                .font(.caption)
                 Spacer()
                 Toggle("", isOn: Binding(
                     get: { engine.clamshellModeEnabled },
