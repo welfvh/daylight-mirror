@@ -540,8 +540,8 @@ struct MirrorMenuView: View {
         case .idle: return .gray
         case .waitingForDevice: return .secondary
         case .starting, .stopping: return .secondary
-        case .running: return .primary
-        case .error: return .primary
+        case .running: return .green
+        case .error: return .red
         }
     }
 
@@ -550,7 +550,7 @@ struct MirrorMenuView: View {
         case .idle: return "Idle"
         case .waitingForDevice: return "Waiting"
         case .starting: return "Starting"
-        case .running: return "Running"
+        case .running: return hasDC1 ? "DC-1 connected" : "Running"
         case .stopping: return "Stopping"
         case .error: return "Error"
         }
