@@ -560,6 +560,7 @@ struct MirrorMenuView: View {
 
     @State private var showDetailedStats = false
     @State private var showClamshellConfirm = false
+    @State private var showClamshellConfirmIdle = false
 
     /// Whether any DC-1 device is among the active sessions.
     private var hasDC1: Bool { engine.sessions.contains { $0.device.deviceFamily == .daylightDC1 } }
@@ -696,35 +697,7 @@ struct MirrorMenuView: View {
                         .labelsHidden()
                 }
 
-                HStack {
-                    Label {
-                        Text("Clamshell mode")
-                    } icon: {
-                        Image(systemName: "laptopcomputer.closed")
-                            .frame(width: 14, alignment: .center)
-                    }
-                    .font(.caption)
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { engine.clamshellModeEnabled },
-                        set: { newValue in
-                            if newValue && !engine.clamshellModeEnabled {
-                                showClamshellConfirm = true
-                            } else {
-                                engine.clamshellModeEnabled = newValue
-                            }
-                        }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .labelsHidden()
-                }
-                .alert("Keep Mac awake with lid closed?", isPresented: $showClamshellConfirm) {
-                    Button("Cancel", role: .cancel) {}
-                    Button("Enable") { engine.clamshellModeEnabled = true }
-                } message: {
-                    Text("While mirroring, your Mac won't sleep when you close the lid.\n\n• Higher battery usage — keep your Mac plugged in\n• No automatic screen lock — your Mac stays accessible")
-                }
+                clamshellToggle(confirmState: $showClamshellConfirm)
 
                 Divider()
 
@@ -995,35 +968,7 @@ struct MirrorMenuView: View {
                 .labelsHidden()
         }
 
-        HStack {
-            Label {
-                Text("Clamshell mode")
-            } icon: {
-                Image(systemName: "laptopcomputer.closed")
-                    .frame(width: 14, alignment: .center)
-            }
-            .font(.caption)
-            Spacer()
-            Toggle("", isOn: Binding(
-                get: { engine.clamshellModeEnabled },
-                set: { newValue in
-                    if newValue && !engine.clamshellModeEnabled {
-                        showClamshellConfirm = true
-                    } else {
-                        engine.clamshellModeEnabled = newValue
-                    }
-                }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .labelsHidden()
-        }
-        .alert("Keep Mac awake with lid closed?", isPresented: $showClamshellConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Enable") { engine.clamshellModeEnabled = true }
-        } message: {
-            Text("While mirroring, your Mac won't sleep when you close the lid.\n\n• Higher battery usage — keep your Mac plugged in\n• No automatic screen lock — your Mac stays accessible")
-        }
+        clamshellToggle(confirmState: $showClamshellConfirmIdle)
 
         Divider()
 
@@ -1039,6 +984,60 @@ struct MirrorMenuView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.regular)
+    }
+
+    // MARK: - Clamshell Toggle (inline confirmation)
+
+    @ViewBuilder
+    func clamshellToggle(confirmState: Binding<Bool>) -> some View {
+        if confirmState.wrappedValue {
+            // Inline confirmation — stays inside the menu bar window
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: "powersleep")
+                        .font(.caption)
+                    Text("Keep Mac awake with lid closed?")
+                        .font(.caption.weight(.medium))
+                }
+                Text("Higher battery usage — keep plugged in.\nNo automatic screen lock.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Button("Enable") {
+                        engine.clamshellModeEnabled = true
+                        confirmState.wrappedValue = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    Button("Cancel") {
+                        confirmState.wrappedValue = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+        } else {
+            HStack {
+                Label("Clamshell mode", systemImage: "powersleep")
+                    .font(.caption)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { engine.clamshellModeEnabled },
+                    set: { newValue in
+                        if newValue && !engine.clamshellModeEnabled {
+                            confirmState.wrappedValue = true
+                        } else {
+                            engine.clamshellModeEnabled = newValue
+                        }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+            }
+        }
     }
 
     // MARK: - Stats Row
