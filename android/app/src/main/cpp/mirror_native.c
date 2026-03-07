@@ -129,17 +129,19 @@ static const char *k_vertex_shader_src =
     "    v_texcoord = a_texcoord;\n"
     "}\n";
 
-// Fragment shader with levels adjustment for e-ink crispness.
-// smoothstep(0.02, 0.98, grey) snaps near-black to pure black and near-white to
-// pure white, eliminating residual antialiasing grey that survived Mac-side processing.
-// This is free on the GPU — single ALU instruction per pixel.
+// Fragment shader — passthrough.  All image processing (greyscale, sharpen,
+// contrast, gamma) is done Mac-side in the combined LUT.  An earlier version
+// applied smoothstep(0.08, 0.92) here to snap antialiasing fringes to B/W,
+// but combined with the Mac-side gamma+contrast LUT it crushed light greys
+// (everything above ~200 became pure white) and dark greys (below ~30 became
+// pure black), destroying contrast discrimination.  The Mac LUT alone is
+// sufficient for text crispness; the shader should not double-process.
 static const char *k_fragment_shader_src =
     "precision mediump float;\n"
     "varying vec2 v_texcoord;\n"
     "uniform sampler2D u_texture;\n"
     "void main() {\n"
     "    float grey = texture2D(u_texture, v_texcoord).r;\n"
-    "    grey = smoothstep(0.08, 0.92, grey);\n"
     "    gl_FragColor = vec4(grey, grey, grey, 1.0);\n"
     "}\n";
 
