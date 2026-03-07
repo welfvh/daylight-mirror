@@ -39,11 +39,12 @@ public class InputServer {
     private var scrollEndTimer: DispatchWorkItem?
     private var scrollRemainderX: CGFloat = 0
     private var scrollRemainderY: CGFloat = 0
-    /// Amplifies normalized (0–1) touch deltas to pixel-space scroll distances.
-    private static let scrollSensitivity: CGFloat = 600.0
-    /// Power curve exponent for scroll acceleration. >1 means fast flicks are
-    /// disproportionately amplified while slow precise scrolls stay controlled.
-    private static let scrollAccelExponent: CGFloat = 1.7
+    /// Converts normalized (0–1) touch deltas to base pixel distances.
+    private static let scrollSensitivity: CGFloat = 800.0
+    /// Power curve applied in pixel space for acceleration. Slow scrolls stay
+    /// precise, fast flicks get amplified. Applied after sensitivity scaling
+    /// so the curve operates on meaningful pixel magnitudes, not tiny fractions.
+    private static let scrollAccelExponent: CGFloat = 1.3
     /// How long after the last scroll packet to emit Ended phase (ms).
     /// Finger-lift detection — if no scroll arrives within this window, the gesture is over.
     private static let scrollEndTimeoutMs: Int = 60
@@ -304,17 +305,16 @@ public class InputServer {
         scrollEndTimer?.cancel()
         scrollEndTimer = nil
 
-        // Apply power curve acceleration: slow movements stay precise, fast flicks amplify.
-        // sign(d) * |d|^exponent preserves direction while shaping the response curve.
-        let accelY = CGFloat(dy).sign == .minus
-            ? -pow(abs(CGFloat(dy)), Self.scrollAccelExponent)
-            : pow(abs(CGFloat(dy)), Self.scrollAccelExponent)
-        let accelX = CGFloat(dx).sign == .minus
-            ? -pow(abs(CGFloat(dx)), Self.scrollAccelExponent)
-            : pow(abs(CGFloat(dx)), Self.scrollAccelExponent)
+        // Scale to pixel space first, then apply power curve for acceleration.
+        // This way the curve operates on meaningful magnitudes (e.g. 2–40px),
+        // not tiny normalized fractions where the exponent would crush values.
+        let pixelY = CGFloat(dy) * Self.scrollSensitivity
+        let pixelX = CGFloat(dx) * Self.scrollSensitivity
+        let accelY = copysign(pow(abs(pixelY), Self.scrollAccelExponent), pixelY)
+        let accelX = copysign(pow(abs(pixelX), Self.scrollAccelExponent), pixelX)
 
-        let rawY = accelY * Self.scrollSensitivity + scrollRemainderY
-        let rawX = accelX * Self.scrollSensitivity + scrollRemainderX
+        let rawY = accelY + scrollRemainderY
+        let rawX = accelX + scrollRemainderX
         let scrollY = Int32(rawY)
         let scrollX = Int32(rawX)
         scrollRemainderY = rawY - CGFloat(scrollY)
