@@ -881,22 +881,9 @@ struct MirrorMenuView: View {
 
     @ViewBuilder
     var idleView: some View {
-        VStack(spacing: 8) {
-            // Device detection status
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(engine.deviceDetected ? Color.primary : Color.secondary)
-                    .frame(width: 6, height: 6)
-                Text(engine.deviceDetected ? "Device detected via USB" : "No device connected")
-                    .font(.caption)
-                    .foregroundStyle(engine.deviceDetected ? .primary : .secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Divider()
-
-            // DC-1 resolution
-            Picker("DC-1", selection: $engine.resolution) {
+        // Resolution picker + mode (matches running view layout)
+        HStack(spacing: 6) {
+            Picker("", selection: $engine.resolution) {
                 Section("Landscape") {
                     ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
                         Text("\(res.label) (\(res.rawValue))").tag(res)
@@ -910,31 +897,60 @@ struct MirrorMenuView: View {
             }
             .pickerStyle(.menu)
             .controlSize(.small)
+            .labelsHidden()
 
-            // Boox resolution
-            Picker("Boox", selection: $engine.booxResolution) {
-                ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
-                    Text("\(res.label) (\(res.rawValue))").tag(res)
-                }
+            Picker("", selection: $engine.displayMode) {
+                Text("Mirror").tag(DisplayMode.mirror)
+                Text("Extend").tag(DisplayMode.extended)
             }
-            .pickerStyle(.menu)
+            .pickerStyle(.segmented)
             .controlSize(.small)
-
-            Divider()
-
-            Button(action: {
-                if !MirrorEngine.hasScreenRecordingPermission() {
-                    showSetup()
-                } else {
-                    Task { await engine.start() }
-                }
-            }) {
-                Text("Start Mirror")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
+            .labelsHidden()
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
+
+        Divider()
+
+        // Settings — match running view layout
+        HStack {
+            Label {
+                Text("Auto-reconnect on USB")
+            } icon: {
+                Image(systemName: "cable.connector")
+                    .frame(width: 14, alignment: .center)
+            }
+            .font(.caption)
+            Spacer()
+            Toggle("", isOn: $engine.autoMirrorEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+        }
+
+        HStack {
+            Label("Dim Mac display", systemImage: "display")
+                .font(.caption)
+            Spacer()
+            Toggle("", isOn: $engine.autoDimMac)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+        }
+
+        Divider()
+
+        Button(action: {
+            if !MirrorEngine.hasScreenRecordingPermission() {
+                showSetup()
+            } else {
+                Task { await engine.start() }
+            }
+        }) {
+            Text("Start Mirror")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.regular)
     }
 
     // MARK: - Stats Row
