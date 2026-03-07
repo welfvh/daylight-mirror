@@ -13,6 +13,10 @@ class VirtualDisplayManager {
     let displayID: CGDirectDisplayID
     let width: UInt
     let height: UInt
+    /// Whether this display is configured as a mirror of the built-in display.
+    fileprivate var isMirroring = false
+    /// Callback registered for display reconfiguration events (lid open/close).
+    private var reconfigCallbackRegistered = false
 
     /// Each virtual display needs a unique serial number so macOS treats them as
     /// separate displays. Without this, the second display creation fails (ID 0).
@@ -57,6 +61,13 @@ class VirtualDisplayManager {
     }
 
     func mirrorBuiltInDisplay() {
+        performMirror()
+        isMirroring = true
+        registerReconfigCallback()
+    }
+
+    /// Actually set up the mirror relationship with the built-in display.
+    fileprivate func performMirror() {
         var displayIDs = [CGDirectDisplayID](repeating: 0, count: 32)
         var displayCount: UInt32 = 0
         CGGetOnlineDisplayList(32, &displayIDs, &displayCount)
@@ -70,7 +81,7 @@ class VirtualDisplayManager {
         }
 
         guard let masterID = builtInID else {
-            print("WARNING: No built-in display found")
+            NSLog("[VirtualDisplay] No built-in display found (lid closed?) — skipping mirror")
             return
         }
 
@@ -92,5 +103,46 @@ class VirtualDisplayManager {
         }
 
         print("Mirroring: built-in display \(masterID) -> virtual display \(displayID)")
+    }
+
+    /// Listen for display reconfiguration events (lid open/close, external display changes).
+    /// Re-establishes the mirror relationship when the built-in display reappears.
+    private func registerReconfigCallback() {
+        guard !reconfigCallbackRegistered else { return }
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        CGDisplayRegisterReconfigurationCallback(displayReconfigCallback, selfPtr)
+        reconfigCallbackRegistered = true
+        NSLog("[VirtualDisplay] Registered display reconfiguration callback")
+    }
+
+    /// Unregister the reconfiguration callback to avoid dangling pointers.
+    private func unregisterReconfigCallback() {
+        guard reconfigCallbackRegistered else { return }
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        CGDisplayRemoveReconfigurationCallback(displayReconfigCallback, selfPtr)
+        reconfigCallbackRegistered = false
+    }
+
+    deinit {
+        unregisterReconfigCallback()
+    }
+}
+
+/// Stable C-function-compatible callback for display reconfiguration events.
+/// Must be a free function (not a closure) so the same pointer is used for register/remove.
+private func displayReconfigCallback(
+    _ displayID: CGDirectDisplayID,
+    _ flags: CGDisplayChangeSummaryFlags,
+    _ userInfo: UnsafeMutableRawPointer?
+) {
+    guard let userInfo = userInfo else { return }
+    let manager = Unmanaged<VirtualDisplayManager>.fromOpaque(userInfo).takeUnretainedValue()
+    // Only act on completion of reconfiguration, not the begin phase
+    guard !flags.contains(.beginConfigurationFlag) else { return }
+    guard manager.isMirroring else { return }
+    // Re-establish mirror after a short delay to let macOS settle
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        NSLog("[VirtualDisplay] Display reconfiguration detected — re-establishing mirror")
+        manager.performMirror()
     }
 }

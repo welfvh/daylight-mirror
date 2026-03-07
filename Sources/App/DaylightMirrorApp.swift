@@ -519,6 +519,17 @@ struct MirrorMenuView: View {
         }
         .padding()
         .frame(width: 280)
+        .background {
+            // ESC to dismiss — catches key events even when no focused text field
+            Button("") { dismissMenuBar() }
+                .keyboardShortcut(.escape, modifiers: [])
+                .hidden()
+        }
+    }
+
+    /// Dismiss the MenuBarExtra window by deactivating the app.
+    private func dismissMenuBar() {
+        NSApp.deactivate()
     }
 
     // MARK: - Status Badge
