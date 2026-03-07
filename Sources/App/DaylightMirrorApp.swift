@@ -609,6 +609,7 @@ struct MirrorMenuView: View {
                 .pickerStyle(.segmented)
                 .controlSize(.small)
                 .labelsHidden()
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
         }
 
