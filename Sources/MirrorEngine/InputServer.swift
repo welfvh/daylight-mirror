@@ -40,7 +40,10 @@ public class InputServer {
     private var scrollRemainderX: CGFloat = 0
     private var scrollRemainderY: CGFloat = 0
     /// Amplifies normalized (0–1) touch deltas to pixel-space scroll distances.
-    private static let scrollSensitivity: CGFloat = 800.0
+    private static let scrollSensitivity: CGFloat = 600.0
+    /// Power curve exponent for scroll acceleration. >1 means fast flicks are
+    /// disproportionately amplified while slow precise scrolls stay controlled.
+    private static let scrollAccelExponent: CGFloat = 1.7
     /// How long after the last scroll packet to emit Ended phase (ms).
     /// Finger-lift detection — if no scroll arrives within this window, the gesture is over.
     private static let scrollEndTimeoutMs: Int = 60
@@ -301,9 +304,17 @@ public class InputServer {
         scrollEndTimer?.cancel()
         scrollEndTimer = nil
 
-        // Accumulate with sensitivity and remainder for smooth sub-pixel scrolling
-        let rawY = CGFloat(dy) * Self.scrollSensitivity + scrollRemainderY
-        let rawX = CGFloat(dx) * Self.scrollSensitivity + scrollRemainderX
+        // Apply power curve acceleration: slow movements stay precise, fast flicks amplify.
+        // sign(d) * |d|^exponent preserves direction while shaping the response curve.
+        let accelY = CGFloat(dy).sign == .minus
+            ? -pow(abs(CGFloat(dy)), Self.scrollAccelExponent)
+            : pow(abs(CGFloat(dy)), Self.scrollAccelExponent)
+        let accelX = CGFloat(dx).sign == .minus
+            ? -pow(abs(CGFloat(dx)), Self.scrollAccelExponent)
+            : pow(abs(CGFloat(dx)), Self.scrollAccelExponent)
+
+        let rawY = accelY * Self.scrollSensitivity + scrollRemainderY
+        let rawX = accelX * Self.scrollSensitivity + scrollRemainderX
         let scrollY = Int32(rawY)
         let scrollX = Int32(rawX)
         scrollRemainderY = rawY - CGFloat(scrollY)
