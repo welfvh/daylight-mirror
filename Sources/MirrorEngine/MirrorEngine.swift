@@ -287,9 +287,9 @@ public class MirrorEngine: ObservableObject {
             var port = TCP_PORT
             for (_, device) in sorted.enumerated() {
                 let res = resolutionForDevice(device)
-                // DC-1 always mirrors the Mac's built-in display.
-                // Boox (and any additional devices) always get their own extended display.
-                let mode: DisplayMode = (device.deviceFamily == .daylightDC1) ? .mirror : .extended
+                // DC-1 uses user's display mode preference (mirror or extended).
+                // Boox and additional devices always get their own extended display.
+                let mode: DisplayMode = (device.deviceFamily == .daylightDC1) ? displayMode : .extended
                 let session = DeviceSession(
                     port: port, resolution: res,
                     displayMode: mode, device: device
