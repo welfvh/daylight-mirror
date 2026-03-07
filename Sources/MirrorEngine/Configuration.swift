@@ -94,7 +94,7 @@ public enum DisplayMode: String, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
     public var label: String {
-        switch self { case .mirror: "Mirror"; case .extended: "Extended" }
+        switch self { case .mirror: "Mirror"; case .extended: "Extend" }
     }
 }
 

@@ -604,7 +604,7 @@ struct MirrorMenuView: View {
                     }
                 )) {
                     Text("Mirror").tag(DisplayMode.mirror)
-                    Text("Extended").tag(DisplayMode.extended)
+                    Text("Extend").tag(DisplayMode.extended)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
