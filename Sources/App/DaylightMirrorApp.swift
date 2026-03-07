@@ -621,7 +621,7 @@ struct MirrorMenuView: View {
         if hasDC1 {
             Divider()
 
-            // Backlight toggle — above sliders, hides them when off
+            // Backlight toggle above brightness/warmth sliders
             HStack {
                 Label("Backlight", systemImage: "lightbulb")
                     .font(.caption)
@@ -635,45 +635,43 @@ struct MirrorMenuView: View {
                 .labelsHidden()
             }
 
-            if engine.backlightOn {
-                // Brightness slider (quadratic curve with widened low-end zone)
-                HStack {
-                    Image(systemName: "sun.min")
-                        .font(.caption2)
-                        .frame(width: 14)
-                    Slider(
-                        value: Binding(
-                            get: {
-                                if engine.brightness == 0 { return 0 }
-                                return sqrt(Double(engine.brightness) / 255.0)
-                            },
-                            set: { pos in
-                                engine.setBrightness(MirrorEngine.brightnessFromSliderPos(pos))
-                            }
-                        ),
-                        in: 0...1
-                    )
-                    Image(systemName: "sun.max")
-                        .font(.caption2)
-                        .frame(width: 14)
-                }
+            // Brightness slider (quadratic curve with widened low-end zone)
+            HStack {
+                Image(systemName: "sun.min")
+                    .font(.caption2)
+                    .frame(width: 16, alignment: .center)
+                Slider(
+                    value: Binding(
+                        get: {
+                            if engine.brightness == 0 { return 0 }
+                            return sqrt(Double(engine.brightness) / 255.0)
+                        },
+                        set: { pos in
+                            engine.setBrightness(MirrorEngine.brightnessFromSliderPos(pos))
+                        }
+                    ),
+                    in: 0...1
+                )
+                Image(systemName: "sun.max")
+                    .font(.caption2)
+                    .frame(width: 16, alignment: .center)
+            }
 
-                // Warmth slider
-                HStack {
-                    Image(systemName: "snowflake")
-                        .font(.caption2)
-                        .frame(width: 14)
-                    Slider(
-                        value: Binding(
-                            get: { Double(engine.warmth) },
-                            set: { engine.setWarmth(Int($0)) }
-                        ),
-                        in: 0...255
-                    )
-                    Image(systemName: "flame")
-                        .font(.caption2)
-                        .frame(width: 14)
-                }
+            // Warmth slider
+            HStack {
+                Image(systemName: "snowflake")
+                    .font(.caption2)
+                    .frame(width: 16, alignment: .center)
+                Slider(
+                    value: Binding(
+                        get: { Double(engine.warmth) },
+                        set: { engine.setWarmth(Int($0)) }
+                    ),
+                    in: 0...255
+                )
+                Image(systemName: "flame")
+                    .font(.caption2)
+                    .frame(width: 16, alignment: .center)
             }
         }
 
@@ -684,7 +682,7 @@ struct MirrorMenuView: View {
             HStack {
                 Image(systemName: "circle.dashed")
                     .font(.caption2)
-                    .frame(width: 14)
+                    .frame(width: 16, alignment: .center)
                 Slider(
                     value: Binding(
                         get: { engine.sharpenAmount },
@@ -695,7 +693,7 @@ struct MirrorMenuView: View {
                 )
                 Image(systemName: "diamond")
                     .font(.caption2)
-                    .frame(width: 14)
+                    .frame(width: 16, alignment: .center)
             }
             Text("Sharpen: \(String(format: "%.1f", engine.sharpenAmount))")
                 .font(.system(size: 9))
@@ -736,8 +734,11 @@ struct MirrorMenuView: View {
         Divider()
 
         // Settings — labels left, toggles right
-        HStack {
-            Label("Auto-reconnect on USB", systemImage: "cable.connector")
+        HStack(spacing: 6) {
+            Image(systemName: "cable.connector")
+                .font(.caption)
+                .frame(width: 16, alignment: .center)
+            Text("Auto-reconnect on USB")
                 .font(.caption)
             Spacer()
             Toggle("", isOn: $engine.autoMirrorEnabled)
@@ -746,8 +747,11 @@ struct MirrorMenuView: View {
                 .labelsHidden()
         }
 
-        HStack {
-            Label("Dim Mac display", systemImage: "display")
+        HStack(spacing: 6) {
+            Image(systemName: "display")
+                .font(.caption)
+                .frame(width: 16, alignment: .center)
+            Text("Dim Mac display")
                 .font(.caption)
             Spacer()
             Toggle("", isOn: $engine.autoDimMac)
