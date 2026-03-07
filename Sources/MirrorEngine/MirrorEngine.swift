@@ -403,13 +403,15 @@ public class MirrorEngine: ObservableObject {
                 if let current = MacBrightness.get() {
                     savedMacBrightness = current
                     MacBrightness.set(0)
-                    print("[Mac] Auto-dimmed (was \(current))")
+                    NSLog("[Mac] Auto-dimmed (was %.2f)", current)
+                } else {
+                    NSLog("[Mac] Auto-dim failed: could not read current brightness")
                 }
             } else if total == 0 && wasConnected {
                 if let saved = savedMacBrightness {
                     MacBrightness.set(saved)
                     savedMacBrightness = nil
-                    print("[Mac] Brightness restored to \(saved)")
+                    NSLog("[Mac] Brightness restored to %.2f", saved)
                 }
             }
         }
