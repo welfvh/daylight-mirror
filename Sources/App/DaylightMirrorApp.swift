@@ -639,7 +639,6 @@ struct MirrorMenuView: View {
             HStack {
                 Image(systemName: "sun.min")
                     .font(.caption2)
-                    .frame(width: 16, alignment: .center)
                 Slider(
                     value: Binding(
                         get: {
@@ -654,14 +653,12 @@ struct MirrorMenuView: View {
                 )
                 Image(systemName: "sun.max")
                     .font(.caption2)
-                    .frame(width: 16, alignment: .center)
             }
 
             // Warmth slider
             HStack {
                 Image(systemName: "snowflake")
                     .font(.caption2)
-                    .frame(width: 16, alignment: .center)
                 Slider(
                     value: Binding(
                         get: { Double(engine.warmth) },
@@ -671,7 +668,6 @@ struct MirrorMenuView: View {
                 )
                 Image(systemName: "flame")
                     .font(.caption2)
-                    .frame(width: 16, alignment: .center)
             }
         }
 
@@ -682,7 +678,6 @@ struct MirrorMenuView: View {
             HStack {
                 Image(systemName: "circle.dashed")
                     .font(.caption2)
-                    .frame(width: 16, alignment: .center)
                 Slider(
                     value: Binding(
                         get: { engine.sharpenAmount },
@@ -693,7 +688,6 @@ struct MirrorMenuView: View {
                 )
                 Image(systemName: "diamond")
                     .font(.caption2)
-                    .frame(width: 16, alignment: .center)
             }
             Text("Sharpen: \(String(format: "%.1f", engine.sharpenAmount))")
                 .font(.system(size: 9))
@@ -734,12 +728,14 @@ struct MirrorMenuView: View {
         Divider()
 
         // Settings — labels left, toggles right
-        HStack(spacing: 6) {
-            Image(systemName: "cable.connector")
-                .font(.caption)
-                .frame(width: 16, alignment: .center)
-            Text("Auto-reconnect on USB")
-                .font(.caption)
+        HStack {
+            Label {
+                Text("Auto-reconnect on USB")
+            } icon: {
+                Image(systemName: "cable.connector")
+                    .frame(width: 14, alignment: .center)
+            }
+            .font(.caption)
             Spacer()
             Toggle("", isOn: $engine.autoMirrorEnabled)
                 .toggleStyle(.switch)
@@ -747,11 +743,8 @@ struct MirrorMenuView: View {
                 .labelsHidden()
         }
 
-        HStack(spacing: 6) {
-            Image(systemName: "display")
-                .font(.caption)
-                .frame(width: 16, alignment: .center)
-            Text("Dim Mac display")
+        HStack {
+            Label("Dim Mac display", systemImage: "display")
                 .font(.caption)
             Spacer()
             Toggle("", isOn: $engine.autoDimMac)
