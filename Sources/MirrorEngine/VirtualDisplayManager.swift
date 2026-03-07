@@ -4,6 +4,10 @@
 // display to it. Uses CGVirtualDisplay private API (same as BetterDisplay, DeskPad).
 // With hiDPI=true, macOS renders at 2x — e.g. 1600x1200 pixels at 800x600 logical points.
 // The virtual display disappears when this object is deallocated.
+//
+// Clamshell support: when the built-in display disappears (lid close), the mirror
+// relationship is removed so the virtual display becomes standalone. When the built-in
+// reappears (lid open), mirroring is re-established.
 
 import Foundation
 import CVirtualDisplay
@@ -66,21 +70,9 @@ class VirtualDisplayManager {
         registerReconfigCallback()
     }
 
-    /// Actually set up the mirror relationship with the built-in display.
+    /// Set up the mirror relationship: built-in display mirrors our virtual display.
     fileprivate func performMirror() {
-        var displayIDs = [CGDirectDisplayID](repeating: 0, count: 32)
-        var displayCount: UInt32 = 0
-        CGGetOnlineDisplayList(32, &displayIDs, &displayCount)
-
-        var builtInID: CGDirectDisplayID?
-        for i in 0..<Int(displayCount) {
-            if CGDisplayIsBuiltin(displayIDs[i]) != 0 {
-                builtInID = displayIDs[i]
-                break
-            }
-        }
-
-        guard let masterID = builtInID else {
+        guard let masterID = findBuiltInDisplay() else {
             NSLog("[VirtualDisplay] No built-in display found (lid closed?) — skipping mirror")
             return
         }
@@ -105,8 +97,45 @@ class VirtualDisplayManager {
         print("Mirroring: built-in display \(masterID) -> virtual display \(displayID)")
     }
 
+    /// Remove the mirror relationship so the virtual display becomes standalone.
+    /// Called when the built-in display disappears (lid close in clamshell mode).
+    fileprivate func unmirror() {
+        var configRef: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&configRef) == .success, let config = configRef else {
+            NSLog("[VirtualDisplay] Failed to begin unmirror configuration")
+            return
+        }
+
+        // Passing kCGNullDirectDisplay (0) as the master removes the mirror relationship
+        guard CGConfigureDisplayMirrorOfDisplay(config, displayID, CGDirectDisplayID(kCGNullDirectDisplay)) == .success else {
+            NSLog("[VirtualDisplay] Failed to configure unmirror")
+            CGCancelDisplayConfiguration(config)
+            return
+        }
+
+        guard CGCompleteDisplayConfiguration(config, .forSession) == .success else {
+            NSLog("[VirtualDisplay] Failed to complete unmirror configuration")
+            return
+        }
+
+        NSLog("[VirtualDisplay] Unmirrored — virtual display %d is now standalone", displayID)
+    }
+
+    /// Find the built-in display ID, or nil if the lid is closed.
+    fileprivate func findBuiltInDisplay() -> CGDirectDisplayID? {
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayIDs, &displayCount)
+
+        for i in 0..<Int(displayCount) {
+            if CGDisplayIsBuiltin(displayIDs[i]) != 0 {
+                return displayIDs[i]
+            }
+        }
+        return nil
+    }
+
     /// Listen for display reconfiguration events (lid open/close, external display changes).
-    /// Re-establishes the mirror relationship when the built-in display reappears.
     private func registerReconfigCallback() {
         guard !reconfigCallbackRegistered else { return }
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
@@ -129,7 +158,8 @@ class VirtualDisplayManager {
 }
 
 /// Stable C-function-compatible callback for display reconfiguration events.
-/// Must be a free function (not a closure) so the same pointer is used for register/remove.
+/// On lid close: un-mirrors so virtual display becomes standalone (primary screen).
+/// On lid open: re-mirrors so virtual display shows the built-in display again.
 private func displayReconfigCallback(
     _ displayID: CGDirectDisplayID,
     _ flags: CGDisplayChangeSummaryFlags,
@@ -140,9 +170,15 @@ private func displayReconfigCallback(
     // Only act on completion of reconfiguration, not the begin phase
     guard !flags.contains(.beginConfigurationFlag) else { return }
     guard manager.isMirroring else { return }
-    // Re-establish mirror after a short delay to let macOS settle
+
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-        NSLog("[VirtualDisplay] Display reconfiguration detected — re-establishing mirror")
-        manager.performMirror()
+        let builtInAvailable = manager.findBuiltInDisplay() != nil
+        if builtInAvailable {
+            NSLog("[VirtualDisplay] Built-in display available — re-establishing mirror")
+            manager.performMirror()
+        } else {
+            NSLog("[VirtualDisplay] Built-in display gone (lid closed) — switching to standalone")
+            manager.unmirror()
+        }
     }
 }

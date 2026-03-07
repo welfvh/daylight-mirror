@@ -116,9 +116,10 @@ public class MirrorEngine: ObservableObject {
             }
         }
     }
-    /// IOPMAssertion ID for preventing system sleep. 0 = no active assertion.
+    /// IOPMAssertion IDs for preventing system + display sleep. 0 = no active assertion.
     private var sleepAssertionID: IOPMAssertionID = 0
-    /// Whether a sleep assertion is currently held.
+    private var displayAssertionID: IOPMAssertionID = 0
+    /// Whether sleep assertions are currently held.
     private var hasSleepAssertion: Bool = false
 
     public init() {
@@ -561,31 +562,45 @@ public class MirrorEngine: ObservableObject {
 
     // MARK: - Sleep Prevention (Clamshell Mode)
 
-    /// Create a power assertion that prevents system sleep, enabling lid-closed use.
+    /// Create power assertions that prevent both system sleep and display sleep.
+    /// Both are needed for clamshell mode: system sleep keeps the Mac running,
+    /// display sleep keeps the virtual display pipeline active.
     private func createSleepAssertion() {
         guard !hasSleepAssertion else { return }
         let reason = "Daylight Mirror is actively mirroring to an external display" as CFString
-        let result = IOPMAssertionCreateWithName(
+
+        let sysResult = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
             reason,
             &sleepAssertionID
         )
-        if result == kIOReturnSuccess {
+        let dispResult = IOPMAssertionCreateWithName(
+            kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            reason,
+            &displayAssertionID
+        )
+
+        if sysResult == kIOReturnSuccess && dispResult == kIOReturnSuccess {
             hasSleepAssertion = true
-            NSLog("[Clamshell] Sleep assertion created (ID: %d)", sleepAssertionID)
+            NSLog("[Clamshell] Sleep assertions created (system: %d, display: %d)",
+                  sleepAssertionID, displayAssertionID)
         } else {
-            NSLog("[Clamshell] Failed to create sleep assertion: %d", result)
+            NSLog("[Clamshell] Failed to create sleep assertions: sys=%d, disp=%d",
+                  sysResult, dispResult)
         }
     }
 
-    /// Release the sleep assertion, allowing normal sleep behavior.
+    /// Release sleep assertions, allowing normal sleep behavior.
     private func releaseSleepAssertion() {
         guard hasSleepAssertion else { return }
         IOPMAssertionRelease(sleepAssertionID)
+        IOPMAssertionRelease(displayAssertionID)
         hasSleepAssertion = false
         sleepAssertionID = 0
-        NSLog("[Clamshell] Sleep assertion released")
+        displayAssertionID = 0
+        NSLog("[Clamshell] Sleep assertions released")
     }
 
     public func setFontSmoothing(enabled: Bool) {
