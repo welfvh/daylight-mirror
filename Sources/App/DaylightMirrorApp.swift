@@ -117,6 +117,8 @@ struct SetupView: View {
     @State private var hasScreenRecording = MirrorEngine.hasScreenRecordingPermission()
     @State private var hasAccessibility = MirrorEngine.hasAccessibilityPermission()
     @State private var pollTimer: Timer?
+    @State private var notifyEmail: String = ""
+    @State private var emailSubmitted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -359,6 +361,35 @@ struct SetupView: View {
 
             Spacer()
 
+            // Optional email signup for update notifications
+            VStack(spacing: 8) {
+                if emailSubmitted {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("You'll be notified of major updates")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Get notified of major updates")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        TextField("Email (optional)", text: $notifyEmail)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.small)
+                            .frame(width: 200)
+                            .onSubmit { submitEmail() }
+                        Button("Subscribe") { submitEmail() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(notifyEmail.isEmpty || !notifyEmail.contains("@"))
+                    }
+                }
+            }
+            .padding(.bottom, 8)
+
             Button(action: {
                 pollTimer?.invalidate()
                 onComplete()
@@ -370,6 +401,25 @@ struct SetupView: View {
             .controlSize(.large)
             .padding(.bottom, 32)
         }
+    }
+
+    private func submitEmail() {
+        let email = notifyEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty, email.contains("@") else { return }
+
+        var request = URLRequest(url: URL(string: "https://daylight-notify.potential.workers.dev/subscribe")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: String] = [
+            "email": email,
+            "version": MirrorEngine.appVersion,
+            "source": "app"
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.async { emailSubmitted = true }
+        }.resume()
     }
 
     func howItWorksRow(_ number: String, _ text: String) -> some View {

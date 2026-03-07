@@ -1,0 +1,8 @@
+name = "daylight-notify"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daylight-notify"
+database_id = "5fe56a32-a028-4a3e-a24a-68d2a7bebaa0"
