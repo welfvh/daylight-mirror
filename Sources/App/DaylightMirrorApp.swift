@@ -697,7 +697,23 @@ struct MirrorMenuView: View {
 
                 Divider()
 
-                // Sharpening slider
+                // Display profile picker
+                HStack {
+                    Label("Profile", systemImage: "slider.horizontal.3")
+                        .font(.caption)
+                    Spacer()
+                    Picker("", selection: $engine.displayProfile) {
+                        ForEach(DisplayProfile.allCases) { profile in
+                            Text(profile.rawValue).tag(profile)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .frame(width: 120)
+                }
+
+                // Sharpening slider (visible in Custom mode, read-only label in presets)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Image(systemName: "circle.dashed")

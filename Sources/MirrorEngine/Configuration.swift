@@ -105,6 +105,28 @@ let FRAME_HEADER_SIZE = 11
 let BRIGHTNESS_STEP: Int = 15
 let WARMTH_STEP: Int = 20
 
+// MARK: - Display Profiles
+
+/// Bundles sharpen, contrast, and gamma into named presets for the DC-1 e-ink panel.
+/// "E-ink Crisp" is the optimized default. "Balanced" is gentler. "Custom" unlocks sliders.
+public enum DisplayProfile: String, CaseIterable, Identifiable {
+    case einkCrisp = "E-ink Crisp"
+    case balanced  = "Balanced"
+    case custom    = "Custom"
+
+    public var id: String { rawValue }
+
+    public var sharpen: Double {
+        switch self { case .einkCrisp: 1.5; case .balanced: 0.8; case .custom: 0 }
+    }
+    public var contrast: Double {
+        switch self { case .einkCrisp: 1.2; case .balanced: 1.1; case .custom: 1.0 }
+    }
+    public var gamma: Double {
+        switch self { case .einkCrisp: 1.2; case .balanced: 1.1; case .custom: 1.0 }
+    }
+}
+
 // MARK: - Status
 
 public enum MirrorStatus: Equatable {

@@ -32,16 +32,20 @@ public class MirrorEngine: ObservableObject {
     @Published public var rttMs: Double = 0
     @Published public var rttP95Ms: Double = 0
     @Published public var skippedFrames: Int = 0
+    /// When true, slider changes are being applied by a profile — don't switch to Custom.
+    private var applyingProfile = false
     @Published public var sharpenAmount: Double = 1.0 {
         didSet {
             for session in sessions { session.updateSharpen(sharpenAmount) }
             UserDefaults.standard.set(sharpenAmount, forKey: "sharpenAmount")
+            if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
         }
     }
     @Published public var contrastAmount: Double = 1.0 {
         didSet {
             for session in sessions { session.updateContrast(contrastAmount) }
             UserDefaults.standard.set(contrastAmount, forKey: "contrastAmount")
+            if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
         }
     }
     /// Gamma correction for reflective e-ink displays (~1.0-1.5 vs 2.2 for transmissive LCDs).
@@ -50,6 +54,21 @@ public class MirrorEngine: ObservableObject {
         didSet {
             for session in sessions { session.updateGamma(gammaAmount) }
             UserDefaults.standard.set(gammaAmount, forKey: "gammaAmount")
+            if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
+        }
+    }
+    /// Display profile bundles sharpen+contrast+gamma. Selecting a preset applies its values;
+    /// manually adjusting any slider switches to "Custom".
+    @Published public var displayProfile: DisplayProfile = .einkCrisp {
+        didSet {
+            UserDefaults.standard.set(displayProfile.rawValue, forKey: "displayProfile")
+            if displayProfile != .custom {
+                applyingProfile = true
+                sharpenAmount = displayProfile.sharpen
+                contrastAmount = displayProfile.contrast
+                gammaAmount = displayProfile.gamma
+                applyingProfile = false
+            }
         }
     }
     @Published public var fontSmoothingDisabled: Bool = false
@@ -98,6 +117,8 @@ public class MirrorEngine: ObservableObject {
         self.contrastAmount = savedContrast > 0 ? savedContrast : 1.2
         let savedGamma = UserDefaults.standard.double(forKey: "gammaAmount")
         self.gammaAmount = savedGamma > 0 ? savedGamma : 1.2
+        let savedProfile = UserDefaults.standard.string(forKey: "displayProfile") ?? ""
+        self.displayProfile = DisplayProfile(rawValue: savedProfile) ?? .einkCrisp
         if UserDefaults.standard.object(forKey: "autoMirrorEnabled") != nil {
             self.autoMirrorEnabled = UserDefaults.standard.bool(forKey: "autoMirrorEnabled")
         }
