@@ -8,7 +8,6 @@
 
 import Foundation
 import AppKit
-import IOKit.pwr_mgt
 
 public class MirrorEngine: ObservableObject {
     // RELEASE: Bump this BEFORE creating a GitHub release. Also upload both
@@ -116,11 +115,10 @@ public class MirrorEngine: ObservableObject {
             }
         }
     }
-    /// IOPMAssertion IDs for preventing system + display sleep. 0 = no active assertion.
-    private var sleepAssertionID: IOPMAssertionID = 0
-    private var displayAssertionID: IOPMAssertionID = 0
-    /// Whether sleep assertions are currently held.
-    private var hasSleepAssertion: Bool = false
+    /// Caffeinate child process for preventing sleep (including lid-close).
+    /// Using caffeinate rather than IOPMAssertion because lid close is a hardware
+    /// sleep trigger that overrides software assertions without a real external display.
+    private var caffeinateProcess: Process?
 
     public init() {
         // Load saved resolution — validate it's a known preset, fall back to Sharp.
@@ -562,45 +560,30 @@ public class MirrorEngine: ObservableObject {
 
     // MARK: - Sleep Prevention (Clamshell Mode)
 
-    /// Create power assertions that prevent both system sleep and display sleep.
-    /// Both are needed for clamshell mode: system sleep keeps the Mac running,
-    /// display sleep keeps the virtual display pipeline active.
+    /// Start caffeinate to prevent sleep including lid-close.
+    /// Flags: -d (display), -i (idle), -m (disk), -s (system, AC only).
+    /// caffeinate is the only reliable way to prevent lid-close sleep when
+    /// there's no real external display — IOPMAssertions alone aren't enough.
     private func createSleepAssertion() {
-        guard !hasSleepAssertion else { return }
-        let reason = "Daylight Mirror is actively mirroring to an external display" as CFString
-
-        let sysResult = IOPMAssertionCreateWithName(
-            kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
-            IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            reason,
-            &sleepAssertionID
-        )
-        let dispResult = IOPMAssertionCreateWithName(
-            kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
-            IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            reason,
-            &displayAssertionID
-        )
-
-        if sysResult == kIOReturnSuccess && dispResult == kIOReturnSuccess {
-            hasSleepAssertion = true
-            NSLog("[Clamshell] Sleep assertions created (system: %d, display: %d)",
-                  sleepAssertionID, displayAssertionID)
-        } else {
-            NSLog("[Clamshell] Failed to create sleep assertions: sys=%d, disp=%d",
-                  sysResult, dispResult)
+        guard caffeinateProcess == nil else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+        process.arguments = ["-dims"]
+        do {
+            try process.run()
+            caffeinateProcess = process
+            NSLog("[Clamshell] caffeinate started (pid: %d)", process.processIdentifier)
+        } catch {
+            NSLog("[Clamshell] Failed to start caffeinate: %@", "\(error)")
         }
     }
 
-    /// Release sleep assertions, allowing normal sleep behavior.
+    /// Stop caffeinate, allowing normal sleep behavior.
     private func releaseSleepAssertion() {
-        guard hasSleepAssertion else { return }
-        IOPMAssertionRelease(sleepAssertionID)
-        IOPMAssertionRelease(displayAssertionID)
-        hasSleepAssertion = false
-        sleepAssertionID = 0
-        displayAssertionID = 0
-        NSLog("[Clamshell] Sleep assertions released")
+        guard let process = caffeinateProcess else { return }
+        process.terminate()
+        caffeinateProcess = nil
+        NSLog("[Clamshell] caffeinate stopped")
     }
 
     public func setFontSmoothing(enabled: Bool) {
