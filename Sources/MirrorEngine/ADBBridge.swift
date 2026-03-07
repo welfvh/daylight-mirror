@@ -18,11 +18,14 @@ public struct ConnectedDevice: Identifiable {
     public let model: String
 
     /// Infer device family from the model string reported by ADB.
+    /// Currently identifies DC-1 by exclusion; everything else is `.other`.
+    /// Future: detect specific e-ink tablets and auto-configure resolution.
     public var deviceFamily: DeviceFamily {
         let m = model.lowercased()
-        if m.contains("palma") || m.contains("boox") {
-            return .booxPalma
+        if m.contains("dc-1") || m.contains("daylight") || m.contains("dc1") {
+            return .daylightDC1
         }
+        // Default unknown devices to DC-1 for now (most users only have DC-1)
         return .daylightDC1
     }
 }

@@ -562,8 +562,6 @@ struct MirrorMenuView: View {
 
     /// Whether any DC-1 device is among the active sessions.
     private var hasDC1: Bool { engine.sessions.contains { $0.device.deviceFamily == .daylightDC1 } }
-    /// Whether any Boox Palma is among the active sessions.
-    private var hasBoox: Bool { engine.sessions.contains { $0.device.deviceFamily == .booxPalma } }
 
     @State private var showQuitConfirm = false
 
@@ -581,12 +579,12 @@ struct MirrorMenuView: View {
                     }
                 )) {
                     Section("Landscape") {
-                        ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
+                        ForEach(DisplayResolution.allCases.filter { !$0.isPortrait }) { res in
                             Text("\(res.label) (\(res.rawValue))").tag(res)
                         }
                     }
                     Section("Portrait") {
-                        ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
+                        ForEach(DisplayResolution.allCases.filter { $0.isPortrait }) { res in
                             Text("\(res.label) (\(res.rawValue))").tag(res)
                         }
                     }
@@ -613,25 +611,7 @@ struct MirrorMenuView: View {
             }
         }
 
-        // Boox: separate row when connected
-        if hasBoox {
-            Picker("Boox", selection: Binding(
-                get: { engine.booxResolution },
-                set: { newRes in
-                    guard newRes != engine.booxResolution else { return }
-                    engine.booxResolution = newRes
-                    restartEngine()
-                }
-            )) {
-                ForEach(DisplayResolution.allCases.filter { $0.device == .booxPalma }) { res in
-                    Text("\(res.label) (\(res.rawValue))").tag(res)
-                }
-            }
-            .pickerStyle(.menu)
-            .controlSize(.small)
-        }
-
-        // DC-1 display controls (backlight, brightness, warmth)
+        // DC-1 display controls (brightness, warmth)
         if hasDC1 {
             Divider()
 
@@ -673,10 +653,51 @@ struct MirrorMenuView: View {
 
         Divider()
 
-        // Collapsible "More" section: sharpen slider + stats
-        DisclosureGroup("More", isExpanded: $showDetailedStats) {
+        // Collapsible "More" section: settings, sharpen, stats
+        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showDetailedStats.toggle() } }) {
+            HStack {
+                Text("More")
+                Spacer()
+                Image(systemName: showDetailedStats ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if showDetailedStats {
             VStack(alignment: .leading, spacing: 6) {
-                // Sharpening slider (applies to all devices)
+                // Settings
+                HStack {
+                    Label("Dim Mac display", systemImage: "display")
+                        .font(.caption)
+                    Spacer()
+                    Toggle("", isOn: $engine.autoDimMac)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .labelsHidden()
+                }
+
+                HStack {
+                    Label {
+                        Text("Auto-reconnect on USB")
+                    } icon: {
+                        Image(systemName: "cable.connector")
+                            .frame(width: 14, alignment: .center)
+                    }
+                    .font(.caption)
+                    Spacer()
+                    Toggle("", isOn: $engine.autoMirrorEnabled)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .labelsHidden()
+                }
+
+                Divider()
+
+                // Sharpening slider
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Image(systemName: "circle.dashed")
@@ -719,36 +740,6 @@ struct MirrorMenuView: View {
                 .padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
             }
-            .padding(.top, 4)
-        }
-        .font(.caption)
-
-        Divider()
-
-        // Settings — labels left, toggles right
-        HStack {
-            Label {
-                Text("Auto-reconnect on USB")
-            } icon: {
-                Image(systemName: "cable.connector")
-                    .frame(width: 14, alignment: .center)
-            }
-            .font(.caption)
-            Spacer()
-            Toggle("", isOn: $engine.autoMirrorEnabled)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .labelsHidden()
-        }
-
-        HStack {
-            Label("Dim Mac display", systemImage: "display")
-                .font(.caption)
-            Spacer()
-            Toggle("", isOn: $engine.autoDimMac)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .labelsHidden()
         }
 
         Divider()
@@ -783,14 +774,13 @@ struct MirrorMenuView: View {
     @ViewBuilder
     func deviceRow(_ session: DeviceSession) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: session.device.deviceFamily == .daylightDC1
-                  ? "display" : "iphone")
+            Image(systemName: "display")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(session.device.deviceFamily == .daylightDC1 ? "DC-1" : "Boox Palma")
+                Text(session.device.deviceFamily.rawValue)
                     .font(.caption.weight(.medium))
                 HStack(spacing: 4) {
                     Text(session.resolution.rawValue)
@@ -885,12 +875,12 @@ struct MirrorMenuView: View {
         HStack(spacing: 6) {
             Picker("", selection: $engine.resolution) {
                 Section("Landscape") {
-                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
+                    ForEach(DisplayResolution.allCases.filter { !$0.isPortrait }) { res in
                         Text("\(res.label) (\(res.rawValue))").tag(res)
                     }
                 }
                 Section("Portrait") {
-                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
+                    ForEach(DisplayResolution.allCases.filter { $0.isPortrait }) { res in
                         Text("\(res.label) (\(res.rawValue))").tag(res)
                     }
                 }

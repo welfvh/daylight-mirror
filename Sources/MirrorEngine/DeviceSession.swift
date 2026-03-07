@@ -52,7 +52,7 @@ public class DeviceSession: Identifiable {
     func start(wsServer: WebSocketServer?, sharpenAmount: Double, contrastAmount: Double) async throws {
         let w = resolution.width
         let h = resolution.height
-        let displayName = resolution.device.rawValue
+        let displayName = device.deviceFamily.rawValue
 
         // 1. Virtual display
         displayManager = VirtualDisplayManager(width: w, height: h, hiDPI: resolution.isHiDPI, name: displayName)

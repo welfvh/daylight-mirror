@@ -55,10 +55,6 @@ public class MirrorEngine: ObservableObject {
             NSLog("[MirrorEngine] resolution changed: %@ → %@", oldValue.rawValue, resolution.rawValue)
         }
     }
-    /// Resolution preference for Boox Palma devices.
-    @Published public var booxResolution: DisplayResolution {
-        didSet { UserDefaults.standard.set(booxResolution.rawValue, forKey: "booxResolution") }
-    }
     @Published public var displayMode: DisplayMode {
         didSet { UserDefaults.standard.set(displayMode.rawValue, forKey: "displayMode") }
     }
@@ -82,15 +78,10 @@ public class MirrorEngine: ObservableObject {
     }
 
     public init() {
-        // Load and validate saved resolutions — ensure each belongs to the correct
-        // device family. A corrupted value (e.g. Boox resolution saved as DC-1's)
-        // would cause wrong virtual display dimensions.
+        // Load saved resolution — validate it's a known preset, fall back to Sharp.
         let saved = UserDefaults.standard.string(forKey: "resolution") ?? ""
         let loadedRes = DisplayResolution(rawValue: saved) ?? .sharp
-        self.resolution = (loadedRes.device == .daylightDC1) ? loadedRes : .sharp
-        let savedBoox = UserDefaults.standard.string(forKey: "booxResolution") ?? ""
-        let loadedBoox = DisplayResolution(rawValue: savedBoox) ?? .booxCozy
-        self.booxResolution = (loadedBoox.device == .booxPalma) ? loadedBoox : .booxCozy
+        self.resolution = loadedRes
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
         let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
@@ -103,16 +94,8 @@ public class MirrorEngine: ObservableObject {
         if UserDefaults.standard.object(forKey: "autoDimMac") != nil {
             self.autoDimMac = UserDefaults.standard.bool(forKey: "autoDimMac")
         }
-        // Write back corrected values if saved resolution didn't match device family
-        if loadedRes.device != .daylightDC1 {
-            UserDefaults.standard.set(resolution.rawValue, forKey: "resolution")
-            NSLog("[MirrorEngine] Reset invalid DC-1 resolution '%@' → '%@'", saved, resolution.rawValue)
-        }
-        if loadedBoox.device != .booxPalma {
-            UserDefaults.standard.set(booxResolution.rawValue, forKey: "booxResolution")
-        }
-        NSLog("[MirrorEngine] init, dc1: %@, boox: %@, mode: %@, sharpen: %.1f",
-              resolution.rawValue, booxResolution.rawValue, displayMode.rawValue, sharpenAmount)
+        NSLog("[MirrorEngine] init, resolution: %@, mode: %@, sharpen: %.1f",
+              resolution.rawValue, displayMode.rawValue, sharpenAmount)
 
         // Control socket — always listening so CLI can send START/STOP/etc.
         DispatchQueue.main.async { [weak self] in
@@ -290,9 +273,9 @@ public class MirrorEngine: ObservableObject {
             var port = TCP_PORT
             for (_, device) in sorted.enumerated() {
                 let res = resolutionForDevice(device)
-                // DC-1 uses user's display mode preference (mirror or extended).
-                // Boox and additional devices always get their own extended display.
-                let mode: DisplayMode = (device.deviceFamily == .daylightDC1) ? displayMode : .extended
+                // Primary device uses user's display mode preference.
+                // Additional devices always get their own extended display.
+                let mode: DisplayMode = (port == TCP_PORT) ? displayMode : .extended
                 let session = DeviceSession(
                     port: port, resolution: res,
                     displayMode: mode, device: device
@@ -370,11 +353,10 @@ public class MirrorEngine: ObservableObject {
     }
 
     /// Pick the right resolution for a detected device based on its family.
+    /// Resolution for a given device. Currently all devices use the same resolution.
+    /// Future: auto-detect panel size and generate appropriate presets.
     private func resolutionForDevice(_ device: ConnectedDevice) -> DisplayResolution {
-        switch device.deviceFamily {
-        case .booxPalma: return booxResolution
-        case .daylightDC1: return resolution
-        }
+        return resolution
     }
 
     /// Aggregate stats from all sessions for the UI.

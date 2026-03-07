@@ -31,13 +31,11 @@ final class ConfigurationTests: XCTestCase {
     func testCozyIsHiDPI() {
         XCTAssertTrue(DisplayResolution.cozy.isHiDPI)
         XCTAssertTrue(DisplayResolution.portraitCozy.isHiDPI)
-        XCTAssertTrue(DisplayResolution.booxCozy.isHiDPI)
     }
 
     func testNonCozyAreNotHiDPI() {
         let nonCozy: [DisplayResolution] = [.comfortable, .balanced, .sharp,
-                                            .portraitComfortable, .portraitBalanced, .portraitSharp,
-                                            .booxSharp]
+                                            .portraitComfortable, .portraitBalanced, .portraitSharp]
         for res in nonCozy {
             XCTAssertFalse(res.isHiDPI, "\(res.label) should not be HiDPI")
         }
@@ -88,35 +86,9 @@ final class ConfigurationTests: XCTestCase {
     }
 
     func testLandscapePresetsAreNotPortrait() {
-        let landscape: [DisplayResolution] = [.cozy, .comfortable, .balanced, .sharp, .booxCozy, .booxSharp]
+        let landscape: [DisplayResolution] = [.cozy, .comfortable, .balanced, .sharp]
         for res in landscape {
             XCTAssertFalse(res.isPortrait, "\(res.label) should not be portrait")
-        }
-    }
-
-    // MARK: - Boox Palma presets
-
-    func testBooxSharpIsNativePanel() {
-        XCTAssertEqual(DisplayResolution.booxSharp.width, 1648)
-        XCTAssertEqual(DisplayResolution.booxSharp.height, 824)
-    }
-
-    func testBooxCozyPixelDimensionsMatchNativePanel() {
-        // HiDPI 2x: logical 824x412pt, backing 1648x824px
-        XCTAssertEqual(DisplayResolution.booxCozy.width, 1648)
-        XCTAssertEqual(DisplayResolution.booxCozy.height, 824)
-    }
-
-    func testBooxPresetsAreBooxPalmaDevice() {
-        XCTAssertEqual(DisplayResolution.booxCozy.device, .booxPalma)
-        XCTAssertEqual(DisplayResolution.booxSharp.device, .booxPalma)
-    }
-
-    func testDC1PresetsAreDaylightDC1Device() {
-        let dc1: [DisplayResolution] = [.cozy, .comfortable, .balanced, .sharp,
-                                         .portraitCozy, .portraitComfortable, .portraitBalanced, .portraitSharp]
-        for res in dc1 {
-            XCTAssertEqual(res.device, .daylightDC1, "\(res.label) should be DC-1")
         }
     }
 
