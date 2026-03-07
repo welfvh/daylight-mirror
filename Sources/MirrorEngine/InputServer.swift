@@ -31,10 +31,22 @@ public class InputServer {
     /// Prevents accidental text selection when the user just wants to place the cursor.
     private static let tapDeadzonePoints: CGFloat = 8.0
 
-    // Scroll acceleration: accumulate fractional remainders for smooth scrolling
+    // Scroll state: track gesture phases so macOS treats events as trackpad input
+    // and provides native momentum, rubber-banding, etc. automatically.
+    private var scrollGestureActive = false
+    private var scrollEndTimer: DispatchWorkItem?
     private var scrollRemainderX: CGFloat = 0
     private var scrollRemainderY: CGFloat = 0
+    /// Amplifies normalized (0–1) touch deltas to pixel-space scroll distances.
     private static let scrollSensitivity: CGFloat = 800.0
+    /// How long after the last scroll packet to emit Ended phase (ms).
+    /// Finger-lift detection — if no scroll arrives within this window, the gesture is over.
+    private static let scrollEndTimeoutMs: Int = 60
+
+    // CGScrollPhase values (NOT NSEventPhase — different numeric values)
+    private static let scrollPhaseBegan: Int64 = 1
+    private static let scrollPhaseChanged: Int64 = 2
+    private static let scrollPhaseEnded: Int64 = 4
 
     private var accessibilityWarned = false
 
@@ -87,6 +99,9 @@ public class InputServer {
     }
 
     public func stop() {
+        scrollEndTimer?.cancel()
+        scrollEndTimer = nil
+        if scrollGestureActive { endScrollGesture(at: lastMouseLocation) }
         listener?.cancel()
         listener = nil
         for conn in connections { conn.cancel() }
@@ -118,6 +133,12 @@ public class InputServer {
             mouseDown = false
             injectMouseUp(at: lastMouseLocation)
         }
+        // End any active scroll gesture cleanly
+        if scrollGestureActive {
+            endScrollGesture(at: lastMouseLocation)
+        }
+        scrollEndTimer?.cancel()
+        scrollEndTimer = nil
     }
 
     /// Continuously receive and parse 23-byte touch packets from the connection.
@@ -259,28 +280,66 @@ public class InputServer {
         event.post(tap: .cghidEventTap)
     }
 
-    /// Inject scroll wheel events with acceleration and remainder tracking for smooth sub-pixel scrolling.
+    /// Inject scroll events with proper trackpad phases so macOS provides native
+    /// momentum, rubber-banding, and smooth deceleration automatically.
+    /// Phase state machine: Began → Changed... → Ended (after timeout).
     private func injectScroll(at point: CGPoint, dx: Float, dy: Float) {
-        // Accumulate with sensitivity and remainder for smooth scrolling
+        // Cancel any pending scroll-end — finger is still moving
+        scrollEndTimer?.cancel()
+        scrollEndTimer = nil
+
+        // Accumulate with sensitivity and remainder for smooth sub-pixel scrolling
         let rawY = CGFloat(dy) * Self.scrollSensitivity + scrollRemainderY
         let rawX = CGFloat(dx) * Self.scrollSensitivity + scrollRemainderX
-
         let scrollY = Int32(rawY)
         let scrollX = Int32(rawX)
-
         scrollRemainderY = rawY - CGFloat(scrollY)
         scrollRemainderX = rawX - CGFloat(scrollX)
 
         guard scrollY != 0 || scrollX != 0 else { return }
 
-        // Move cursor to touch location first so scroll targets the right window
-        if let moveEvent = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                    mouseCursorPosition: point, mouseButton: .left) {
-            moveEvent.post(tap: .cghidEventTap)
+        // Determine phase: first scroll event = Began, subsequent = Changed
+        let phase: Int64
+        if !scrollGestureActive {
+            scrollGestureActive = true
+            phase = Self.scrollPhaseBegan
+            // Move cursor so scroll targets the right window
+            if let moveEvent = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                        mouseCursorPosition: point, mouseButton: .left) {
+                moveEvent.post(tap: .cghidEventTap)
+            }
+        } else {
+            phase = Self.scrollPhaseChanged
         }
 
+        // Create continuous (trackpad-style) scroll event with phase info
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
                                    wheelCount: 2, wheel1: scrollY, wheel2: scrollX, wheel3: 0) else { return }
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+        event.post(tap: .cghidEventTap)
+
+        // Schedule scroll-end: if no more scroll packets arrive within the timeout,
+        // emit Ended phase so macOS kicks in momentum scrolling automatically.
+        let endItem = DispatchWorkItem { [weak self] in
+            self?.endScrollGesture(at: point)
+        }
+        scrollEndTimer = endItem
+        queue.asyncAfter(deadline: .now() + .milliseconds(Self.scrollEndTimeoutMs), execute: endItem)
+    }
+
+    /// Emit the Ended phase event, signaling macOS to start momentum scrolling.
+    private func endScrollGesture(at point: CGPoint) {
+        guard scrollGestureActive else { return }
+        scrollGestureActive = false
+        scrollRemainderX = 0
+        scrollRemainderY = 0
+
+        // Ended event must have delta = 0
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                   wheelCount: 2, wheel1: 0, wheel2: 0, wheel3: 0) else { return }
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Self.scrollPhaseEnded)
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
         event.post(tap: .cghidEventTap)
     }
 }
