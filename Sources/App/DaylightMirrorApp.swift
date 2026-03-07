@@ -19,6 +19,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NSLog("[AppDelegate] didFinishLaunching")
         engine.setupGlobalShortcut()
 
+        // Safety net: if a previous crash left disablesleep=1, restore it on launch.
+        // Only runs the sudo prompt if SleepDisabled is actually stuck on.
+        engine.restoreSleepIfNeeded()
+
         // Show setup window if first run or permissions missing
         if !MirrorEngine.setupCompleted || !MirrorEngine.allPermissionsGranted {
             showSetupWindow()

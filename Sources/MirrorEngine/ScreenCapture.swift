@@ -56,7 +56,7 @@ class ScreenCapture: NSObject {
 
     // CGDisplayStream runtime handles
     private var cgHandle: UnsafeMutableRawPointer?       // dlopen handle
-    private var displayStream: OpaquePointer?            // retained stream ref
+    private(set) var displayStream: OpaquePointer?         // retained stream ref
 
     var currentGray: UnsafeMutablePointer<UInt8>?
     var previousGray: UnsafeMutablePointer<UInt8>?
@@ -202,19 +202,11 @@ class ScreenCapture: NSObject {
         isStopped = true
         stoppedLock.unlock()
 
-        if let stream = displayStream {
-            // Load stop function
-            if let cg = cgHandle, let stopSym = dlsym(cg, "CGDisplayStreamStop") {
-                let stopFn = unsafeBitCast(stopSym, to: CGDisplayStreamStopFn.self)
-                _ = stopFn(stream)
-            }
-            // Let any in-flight callbacks on captureQueue drain before releasing
-            try? await Task.sleep(for: .milliseconds(100))
-            // Release the retained CFTypeRef
-            let cfStream = Unmanaged<CFTypeRef>.fromOpaque(UnsafeRawPointer(stream))
-            cfStream.release()
-            displayStream = nil
-        }
+        stopStream()
+        // Let any in-flight callbacks on captureQueue drain before releasing
+        try? await Task.sleep(for: .milliseconds(100))
+        releaseStream()
+
         if let cg = cgHandle {
             dlclose(cg)
             cgHandle = nil
@@ -224,6 +216,101 @@ class ScreenCapture: NSObject {
         deltaBuffer?.deallocate(); deltaBuffer = nil
         sharpenTemp?.deallocate(); sharpenTemp = nil
         compressedBuffer?.deallocate(); compressedBuffer = nil
+    }
+
+    /// Stop the CGDisplayStream without releasing buffers.
+    private func stopStream() {
+        guard let stream = displayStream else { return }
+        if let cg = cgHandle, let stopSym = dlsym(cg, "CGDisplayStreamStop") {
+            let stopFn = unsafeBitCast(stopSym, to: CGDisplayStreamStopFn.self)
+            _ = stopFn(stream)
+        }
+    }
+
+    /// Release the retained CGDisplayStream CFTypeRef.
+    private func releaseStream() {
+        guard let stream = displayStream else { return }
+        let cfStream = Unmanaged<CFTypeRef>.fromOpaque(UnsafeRawPointer(stream))
+        cfStream.release()
+        displayStream = nil
+    }
+
+    /// Restart the CGDisplayStream after a display sleep/wake cycle (clamshell mode).
+    /// Tears down the old stream and creates a new one targeting the same display,
+    /// keeping all buffers and state intact. Forces a keyframe on the next frame.
+    func restartStream() async {
+        NSLog("[Capture] Restarting CGDisplayStream for display %d...", targetDisplayID)
+
+        // Stop old stream
+        stoppedLock.lock()
+        isStopped = true
+        stoppedLock.unlock()
+
+        stopStream()
+        try? await Task.sleep(for: .milliseconds(200))
+        releaseStream()
+
+        // Reset frame state for clean restart
+        stoppedLock.lock()
+        isStopped = false
+        stoppedLock.unlock()
+        forceNextKeyframe = true
+        frameCount = 0
+        lastCallbackTime = 0
+
+        // Re-create stream using existing cgHandle (CoreGraphics dylib)
+        guard let cg = cgHandle else {
+            // Re-open CoreGraphics if handle was lost
+            guard let newCg = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY) else {
+                NSLog("[Capture] FATAL: Failed to dlopen CoreGraphics on restart")
+                return
+            }
+            cgHandle = newCg
+            return await restartStream()  // retry with new handle
+        }
+
+        guard let createSym = dlsym(cg, "CGDisplayStreamCreateWithDispatchQueue"),
+              let startSym = dlsym(cg, "CGDisplayStreamStart") else {
+            NSLog("[Capture] FATAL: Failed to resolve CGDisplayStream symbols on restart")
+            return
+        }
+
+        let createFn = unsafeBitCast(createSym, to: CGDisplayStreamCreateFn.self)
+        let startFn = unsafeBitCast(startSym, to: CGDisplayStreamStartFn.self)
+
+        let properties: NSDictionary = [
+            "kCGDisplayStreamMinimumFrameTime": NSNumber(value: 1.0 / Double(TARGET_FPS)),
+            "kCGDisplayStreamShowCursor": kCFBooleanTrue as Any
+        ]
+
+        let captureQueue = DispatchQueue(label: "capture", qos: .userInteractive)
+        let pixelFormat: Int32 = 1111970369  // kCVPixelFormatType_32BGRA
+
+        guard let stream = createFn(
+            targetDisplayID,
+            frameWidth,
+            frameHeight,
+            pixelFormat,
+            properties as CFDictionary,
+            captureQueue,
+            { [weak self] (status: Int32, _: UInt64, surface: IOSurfaceRef?, _: OpaquePointer?) in
+                self?.handleFrame(status: status, surface: surface)
+            }
+        ) else {
+            NSLog("[Capture] Failed to create new CGDisplayStream — display %d may be unavailable", targetDisplayID)
+            return
+        }
+
+        displayStream = stream
+        let cfStream = Unmanaged<CFTypeRef>.fromOpaque(UnsafeRawPointer(stream))
+        _ = cfStream.retain()
+
+        let result = startFn(stream)
+        if result == 0 {
+            NSLog("[Capture] CGDisplayStream restarted successfully for display %d", targetDisplayID)
+        } else {
+            NSLog("[Capture] CGDisplayStreamStart failed on restart with code %d", result)
+        }
     }
 
     // MARK: - Frame callback

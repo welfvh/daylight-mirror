@@ -8,6 +8,8 @@
 
 import Foundation
 import AppKit
+import IOKit
+import Security
 
 public class MirrorEngine: ObservableObject {
     // RELEASE: Bump this BEFORE creating a GitHub release. Also upload both
@@ -118,7 +120,21 @@ public class MirrorEngine: ObservableObject {
     /// Caffeinate child process for preventing sleep (including lid-close).
     /// Using caffeinate rather than IOPMAssertion because lid close is a hardware
     /// sleep trigger that overrides software assertions without a real external display.
-    private var caffeinateProcess: Process?
+    private(set) var caffeinateProcess: Process?
+    /// Cached authorization ref for privileged pmset commands. Created once per
+    /// app session when the user enters their password, reused for subsequent calls.
+    private var authRef: AuthorizationRef?
+    /// Observers for system wake notifications (clamshell capture recovery).
+    private var wakeObserver: NSObjectProtocol?
+    private var displayWakeObserver: NSObjectProtocol?
+    /// Timer that checks for stalled frame delivery (backup for wake detection).
+    private var stallDetectorTimer: Timer?
+    /// Debounce: timestamp of last capture restart to avoid restart loops.
+    private var lastCaptureRestart: Date = .distantPast
+    /// Timer that polls IOKit for lid state changes (clamshell unmirror/remirror).
+    private var lidMonitorTimer: Timer?
+    /// Last known lid state to detect transitions.
+    private var lastLidClosed: Bool = false
 
     public init() {
         // Load saved resolution — validate it's a known preset, fall back to Sharp.
@@ -560,30 +576,206 @@ public class MirrorEngine: ObservableObject {
 
     // MARK: - Sleep Prevention (Clamshell Mode)
 
-    /// Start caffeinate to prevent sleep including lid-close.
-    /// Flags: -d (display), -i (idle). The virtual display satisfies macOS's
-    /// "external display present" check for clamshell mode, and these assertions
-    /// prevent the system from sleeping when the lid closes.
+    /// Disable system sleep entirely via `pmset disablesleep 1`. This is the only
+    /// reliable way to prevent lid-close sleep on battery — caffeinate assertions
+    /// are ignored for hardware lid-close events. Requires admin privileges, which
+    /// are requested via osascript the first time. Also starts caffeinate as a
+    /// backup for idle sleep prevention.
     private func createSleepAssertion() {
         guard caffeinateProcess == nil else { return }
+
+        // pmset disablesleep 1 — requires sudo, prevents ALL sleep including lid close
+        setSleepDisabled(true)
+
+        // caffeinate as backup for idle sleep
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
         process.arguments = ["-di"]
         do {
             try process.run()
             caffeinateProcess = process
+            startLidMonitor()
             NSLog("[Clamshell] caffeinate started (pid: %d)", process.processIdentifier)
         } catch {
             NSLog("[Clamshell] Failed to start caffeinate: %@", "\(error)")
         }
     }
 
-    /// Stop caffeinate, allowing normal sleep behavior.
+    /// Re-enable system sleep and stop caffeinate.
     private func releaseSleepAssertion() {
+        setSleepDisabled(false)
         guard let process = caffeinateProcess else { return }
         process.terminate()
         caffeinateProcess = nil
+        stopWakeListeners()
         NSLog("[Clamshell] caffeinate stopped")
+    }
+
+    /// On launch, check if a previous crash left SleepDisabled=1 and restore it.
+    public func restoreSleepIfNeeded() {
+        guard !clamshellModeEnabled else { return } // clamshell is on, leave it
+        let service = IOServiceGetMatchingService(kIOMainPortDefault,
+            IOServiceMatching("IOPMrootDomain"))
+        guard service != IO_OBJECT_NULL else { return }
+        defer { IOObjectRelease(service) }
+        if let prop = IORegistryEntryCreateCFProperty(service,
+            "SleepDisabled" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue(),
+           let val = prop as? Bool, val == true {
+            NSLog("[Clamshell] SleepDisabled=1 found on launch (previous crash?) — restoring")
+            setSleepDisabled(false)
+        }
+    }
+
+    /// Set `pmset disablesleep` via cached privileged execution. Uses the Security
+    /// framework's AuthorizationExecuteWithPrivileges (loaded via dlsym) to run pmset
+    /// as root. The authorization ref is created once per app session — the system
+    /// password dialog appears on first use, then subsequent calls reuse the cached auth.
+    private func setSleepDisabled(_ disabled: Bool) {
+        let value = disabled ? "1" : "0"
+
+        // Create and cache authorization ref — only prompts once per app session
+        if authRef == nil {
+            var auth: AuthorizationRef?
+            let status = AuthorizationCreate(nil, nil, [], &auth)
+            guard status == errAuthorizationSuccess, let a = auth else {
+                NSLog("[Clamshell] Failed to create AuthorizationRef (status %d)", status)
+                return
+            }
+            authRef = a
+        }
+
+        guard let auth = authRef else { return }
+
+        // Pre-authorize: shows password dialog first time, cached after
+        var rightName = kAuthorizationRightExecute.withCString { strdup($0)! }
+        defer { free(rightName) }
+        var item = AuthorizationItem(name: rightName, valueLength: 0, value: nil, flags: 0)
+        var rights = AuthorizationRights(count: 1, items: &item)
+        let flags: AuthorizationFlags = [.interactionAllowed, .extendRights, .preAuthorize]
+
+        let authStatus = AuthorizationCopyRights(auth, &rights, nil, flags, nil)
+        guard authStatus == errAuthorizationSuccess else {
+            NSLog("[Clamshell] Authorization denied (status %d)", authStatus)
+            return
+        }
+
+        // Load AuthorizationExecuteWithPrivileges from Security framework (deprecated
+        // but still functional — the standard pattern used by Sparkle, Homebrew, etc.)
+        typealias AuthExecFn = @convention(c) (
+            AuthorizationRef,
+            UnsafePointer<CChar>,
+            AuthorizationFlags,
+            UnsafePointer<UnsafeMutablePointer<CChar>?>,
+            UnsafeMutablePointer<UnsafeMutablePointer<FILE>?>?
+        ) -> OSStatus
+
+        guard let secHandle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+              let sym = dlsym(secHandle, "AuthorizationExecuteWithPrivileges") else {
+            NSLog("[Clamshell] Failed to load AuthorizationExecuteWithPrivileges")
+            // Fallback to osascript
+            setSleepDisabledFallback(disabled)
+            return
+        }
+        let execFn = unsafeBitCast(sym, to: AuthExecFn.self)
+
+        let tool = "/usr/bin/pmset"
+        let arg1 = strdup("disablesleep")!
+        let arg2 = strdup(value)!
+        defer { free(arg1); free(arg2) }
+        var args: [UnsafeMutablePointer<CChar>?] = [arg1, arg2, nil]
+
+        let execStatus = execFn(auth, tool, [], &args, nil)
+        if execStatus == errAuthorizationSuccess {
+            NSLog("[Clamshell] pmset disablesleep %@", value)
+        } else {
+            NSLog("[Clamshell] pmset execution failed (status %d) — trying fallback", execStatus)
+            setSleepDisabledFallback(disabled)
+        }
+    }
+
+    /// Fallback: use osascript if AuthorizationExecuteWithPrivileges is unavailable.
+    private func setSleepDisabledFallback(_ disabled: Bool) {
+        let value = disabled ? "1" : "0"
+        let script = "do shell script \"/usr/bin/pmset disablesleep \(value)\" with administrator privileges"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                NSLog("[Clamshell] pmset disablesleep %@ (fallback)", value)
+            } else {
+                NSLog("[Clamshell] pmset disablesleep fallback failed (status %d)", process.terminationStatus)
+            }
+        } catch {
+            NSLog("[Clamshell] Failed to run pmset fallback: %@", "\(error)")
+        }
+    }
+
+    /// Start monitoring lid state via IOKit. When the lid closes, the built-in
+    /// display goes offline which breaks the mirror relationship. When the lid
+    /// reopens, we re-mirror and restart the capture to restore the pipeline.
+    private func startLidMonitor() {
+        guard lidMonitorTimer == nil else { return }
+        lastLidClosed = Self.isLidClosed()
+
+        lidMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self, self.status == .running, self.clamshellModeEnabled else { return }
+            let closed = Self.isLidClosed()
+            if closed != self.lastLidClosed {
+                self.lastLidClosed = closed
+                if closed {
+                    NSLog("[Clamshell] Lid closed — mirror will break when built-in goes offline")
+                } else {
+                    NSLog("[Clamshell] Lid opened — re-mirroring and restarting capture")
+                    // Delay to let macOS finish bringing the built-in display back online
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        for session in self.sessions {
+                            if session.displayMode == .mirror {
+                                session.remirror()
+                            }
+                        }
+                        // Restart capture after re-mirror settles
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            Task {
+                                for session in self.sessions {
+                                    await session.restartCapture()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        NSLog("[Clamshell] Lid monitor started (polling 0.5s)")
+    }
+
+    private func stopLidMonitor() {
+        lidMonitorTimer?.invalidate()
+        lidMonitorTimer = nil
+    }
+
+    /// Query IOKit for the current lid state.
+    static func isLidClosed() -> Bool {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault,
+            IOServiceMatching("IOPMrootDomain"))
+        guard service != IO_OBJECT_NULL else { return false }
+        defer { IOObjectRelease(service) }
+        if let prop = IORegistryEntryCreateCFProperty(service,
+            "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() {
+            return (prop as? Bool) == true
+        }
+        return false
+    }
+
+    private func stopWakeListeners() {
+        let ws = NSWorkspace.shared.notificationCenter
+        if let obs = wakeObserver { ws.removeObserver(obs); wakeObserver = nil }
+        if let obs = displayWakeObserver { ws.removeObserver(obs); displayWakeObserver = nil }
+        stallDetectorTimer?.invalidate()
+        stallDetectorTimer = nil
+        stopLidMonitor()
     }
 
     public func setFontSmoothing(enabled: Bool) {

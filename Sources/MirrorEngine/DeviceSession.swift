@@ -190,4 +190,20 @@ public class DeviceSession: Identifiable {
     func updateGamma(_ amount: Double) {
         capture?.gammaAmount = amount
     }
+
+    /// Restart the screen capture stream after a display sleep/wake cycle.
+    /// Used by clamshell mode to recover from DarkWake display pipeline stalls.
+    func restartCapture() async {
+        await capture?.restartStream()
+    }
+
+    /// Break the mirror relationship so the virtual display is standalone.
+    func unmirror() {
+        displayManager?.unmirrorBuiltInDisplay()
+    }
+
+    /// Re-establish the mirror relationship with the built-in display.
+    func remirror() {
+        displayManager?.mirrorBuiltInDisplay()
+    }
 }

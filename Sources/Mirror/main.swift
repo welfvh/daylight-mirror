@@ -9,6 +9,8 @@
 //   daylight-mirror warmth [0-255]     — Get or set Daylight warmth (amber rate)
 //   daylight-mirror backlight [on|off|toggle] — Get or toggle backlight
 //   daylight-mirror resolution [preset] — Get or set resolution (incl. portrait variants)
+//   daylight-mirror clamshell [on|off] — Get or set clamshell mode (lid-closed operation)
+//   daylight-mirror health             — Full engine health status dump
 //   daylight-mirror restart            — Full stop + start cycle
 //
 // The engine (whether started by this CLI or the GUI menu bar app) exposes a
@@ -454,6 +456,58 @@ func commandFontSmoothing() {
     }
 }
 
+/// `daylight-mirror clamshell [on|off]` — get or set clamshell mode (prevent sleep on lid close).
+func commandClamshell() {
+    let arg = args.count > 2 ? args[2].lowercased() : nil
+    if let arg = arg {
+        guard ["on", "off", "enable", "disable"].contains(arg) else {
+            print("ERROR: clamshell argument must be on or off")
+            exit(1)
+        }
+        runControlCommand("CLAMSHELL \(arg)")
+    } else {
+        runControlCommand("CLAMSHELL")
+    }
+}
+
+/// `daylight-mirror health [verbose]` — print full engine health status.
+/// With `verbose`, includes system-level diagnostics (memory, IOKit state, per-session details).
+func commandHealth() {
+    let verbose = args.count > 2 && args[2].lowercased() == "verbose"
+    guard controlSocketExists() else {
+        print("ERROR: Daylight Mirror is not running.")
+        exit(1)
+    }
+    let cmd = verbose ? "HEALTH verbose" : "HEALTH"
+    guard let response = sendControlCommand(cmd) else {
+        print("ERROR: Could not connect to control socket.")
+        exit(1)
+    }
+    if response.hasPrefix("ERR") {
+        print(response)
+        exit(1)
+    }
+    let lines = response.split(separator: "\n").dropFirst()
+    print("Daylight Mirror — Health\(verbose ? " (verbose)" : "")")
+    print("========================")
+    var section = ""
+    for line in lines {
+        let lineStr = String(line)
+        if lineStr.hasPrefix("---") && lineStr.hasSuffix("---") {
+            section = lineStr.replacingOccurrences(of: "-", with: "")
+            print("")
+            print("  [\(section)]")
+            continue
+        }
+        let kv = lineStr.split(separator: "=", maxSplits: 1)
+        if kv.count == 2 {
+            let key = String(kv[0]).replacingOccurrences(of: "_", with: " ")
+            let val = String(kv[1])
+            print("  \(key.padding(toLength: 28, withPad: " ", startingAt: 0)) \(val)")
+        }
+    }
+}
+
 /// `daylight-mirror latency` — print latency diagnostics. With `--watch`, polls every 2s.
 func commandLatency() {
     let watch = args.contains("--watch") || args.contains("-w")
@@ -548,6 +602,8 @@ func printUsage() {
     print("  sharpen [0.0-3.0]        Get or set sharpening (0=none, 1=mild, 2=strong)")
     print("  contrast [1.0-2.0]       Get or set contrast (1.0=off, 1.5=moderate, 2.0=high)")
     print("  fontsmoothing [on|off]   Get or set macOS font smoothing (off = crisper text)")
+    print("  clamshell [on|off]       Get or set clamshell mode (prevent sleep on lid close)")
+    print("  health [verbose]         Print engine health (verbose adds memory, IOKit, sessions)")
     print("  latency                  Print latency diagnostics (RTT, jitter, processing times)")
     print("  latency --watch          Continuously poll latency stats every 2 seconds")
     print("  restart                  Full stop + start cycle")
@@ -586,6 +642,10 @@ case "contrast":
     commandContrast()
 case "fontsmoothing":
     commandFontSmoothing()
+case "clamshell":
+    commandClamshell()
+case "health":
+    commandHealth()
 case "latency":
     commandLatency()
 case "-h", "--help", "help":
