@@ -321,18 +321,18 @@ class ScreenCapture: NSObject {
         // Contrast stretch pushes light borders darker and dark text blacker.
         // LUT rebuilt lazily on capture thread to avoid data race with main thread.
         let gammaAmt = gammaAmount
-        let needsLUT = contrastAmt > 1.01 || gammaAmt > 1.01
+        // Combined gamma + contrast enhancement via single precomputed LUT.
+        // Active when either gamma or contrast differs from 1.0 (identity).
+        let needsLUT = abs(contrastAmt - 1.0) > 0.01 || abs(gammaAmt - 1.0) > 0.01
         if needsLUT {
             if contrastAmt != lastContrastAmount || gammaAmt != lastGammaAmount {
                 contrastLUT = (0..<256).map { i in
-                    // Apply gamma first: corrected = pow(input/255, gamma) * 255
                     var val = Double(i) / 255.0
-                    if gammaAmt > 1.01 {
-                        val = pow(val, 1.0 / gammaAmt)  // Inverse gamma brightens midtones
+                    if abs(gammaAmt - 1.0) > 0.01 {
+                        val = pow(val, 1.0 / gammaAmt)
                     }
                     val = val * 255.0
-                    // Then apply contrast stretch: output = 128 + contrast * (input - 128)
-                    if contrastAmt > 1.01 {
+                    if abs(contrastAmt - 1.0) > 0.01 {
                         val = 128.0 + contrastAmt * (val - 128.0)
                     }
                     return UInt8(max(0, min(255, Int(val))))

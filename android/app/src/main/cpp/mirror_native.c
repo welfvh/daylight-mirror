@@ -139,7 +139,7 @@ static const char *k_fragment_shader_src =
     "uniform sampler2D u_texture;\n"
     "void main() {\n"
     "    float grey = texture2D(u_texture, v_texcoord).r;\n"
-    "    grey = smoothstep(0.02, 0.98, grey);\n"
+    "    grey = smoothstep(0.08, 0.92, grey);\n"
     "    gl_FragColor = vec4(grey, grey, grey, 1.0);\n"
     "}\n";
 

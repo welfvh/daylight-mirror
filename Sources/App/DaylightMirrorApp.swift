@@ -654,7 +654,7 @@ struct MirrorMenuView: View {
         Divider()
 
         // Collapsible "More" section: settings, sharpen, stats
-        Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showDetailedStats.toggle() } }) {
+        Button(action: { showDetailedStats.toggle() }) {
             HStack {
                 Text("More")
                 Spacer()
@@ -744,7 +744,7 @@ struct MirrorMenuView: View {
                                 get: { engine.contrastAmount },
                                 set: { engine.contrastAmount = $0 }
                             ),
-                            in: 1.0...1.8,
+                            in: 0.5...1.8,
                             step: 0.1
                         )
                         Image(systemName: "circle.righthalf.filled")

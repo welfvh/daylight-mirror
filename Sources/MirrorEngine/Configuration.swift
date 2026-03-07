@@ -117,13 +117,13 @@ public enum DisplayProfile: String, CaseIterable, Identifiable {
     public var id: String { rawValue }
 
     public var sharpen: Double {
-        switch self { case .einkCrisp: 1.5; case .balanced: 0.8; case .custom: 0 }
+        switch self { case .einkCrisp: 1.5; case .balanced: 0.5; case .custom: 0 }
     }
     public var contrast: Double {
-        switch self { case .einkCrisp: 1.2; case .balanced: 1.1; case .custom: 1.0 }
+        switch self { case .einkCrisp: 1.2; case .balanced: 1.0; case .custom: 1.0 }
     }
     public var gamma: Double {
-        switch self { case .einkCrisp: 1.2; case .balanced: 1.1; case .custom: 1.0 }
+        switch self { case .einkCrisp: 1.2; case .balanced: 1.0; case .custom: 1.0 }
     }
 }
 
