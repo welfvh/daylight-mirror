@@ -470,14 +470,30 @@ struct MirrorMenuView: View {
             Divider()
 
             HStack {
-                Button("Quit") {
-                    engine.stop()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        NSApp.terminate(nil)
+                if showQuitConfirm {
+                    Text("Quit?")
+                        .font(.caption.weight(.medium))
+                    Button("Yes") {
+                        engine.stop()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            NSApp.terminate(nil)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    Button("No") {
+                        showQuitConfirm = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else {
+                    Button("Quit") {
+                        showQuitConfirm = true
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
                 }
-                .buttonStyle(.plain)
-                .font(.caption)
                 Spacer()
                 Button("Feedback") {
                     NSWorkspace.shared.open(URL(string: "https://github.com/welfvh/daylight-mirror/issues")!)
@@ -549,57 +565,54 @@ struct MirrorMenuView: View {
     /// Whether any Boox Palma is among the active sessions.
     private var hasBoox: Bool { engine.sessions.contains { $0.device.deviceFamily == .booxPalma } }
 
+    @State private var showQuitConfirm = false
+
     @ViewBuilder
     var runningView: some View {
-        // Connected devices list
-        VStack(spacing: 6) {
-            ForEach(engine.sessions) { session in
-                deviceRow(session)
-            }
-        }
-
-        Divider()
-
-        // Per-device resolution pickers (only show for connected device families)
+        // DC-1: resolution picker + mode on one row
         if hasDC1 {
-            Picker("DC-1", selection: Binding(
-                get: { engine.resolution },
-                set: { newRes in
-                    guard newRes != engine.resolution else { return }
-                    engine.resolution = newRes
-                    restartEngine()
-                }
-            )) {
-                Section("Landscape") {
-                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
-                        Text("\(res.label) (\(res.rawValue))").tag(res)
+            HStack(spacing: 6) {
+                Picker("", selection: Binding(
+                    get: { engine.resolution },
+                    set: { newRes in
+                        guard newRes != engine.resolution else { return }
+                        engine.resolution = newRes
+                        restartEngine()
+                    }
+                )) {
+                    Section("Landscape") {
+                        ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && !$0.isPortrait }) { res in
+                            Text("\(res.label) (\(res.rawValue))").tag(res)
+                        }
+                    }
+                    Section("Portrait") {
+                        ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
+                            Text("\(res.label) (\(res.rawValue))").tag(res)
+                        }
                     }
                 }
-                Section("Portrait") {
-                    ForEach(DisplayResolution.allCases.filter { $0.device == .daylightDC1 && $0.isPortrait }) { res in
-                        Text("\(res.label) (\(res.rawValue))").tag(res)
-                    }
-                }
-            }
-            .pickerStyle(.menu)
-            .controlSize(.small)
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .labelsHidden()
 
-            // Display mode selector
-            Picker("Mode", selection: Binding(
-                get: { engine.displayMode },
-                set: { newMode in
-                    guard newMode != engine.displayMode else { return }
-                    engine.displayMode = newMode
-                    restartEngine()
+                Picker("", selection: Binding(
+                    get: { engine.displayMode },
+                    set: { newMode in
+                        guard newMode != engine.displayMode else { return }
+                        engine.displayMode = newMode
+                        restartEngine()
+                    }
+                )) {
+                    Text("Mirror").tag(DisplayMode.mirror)
+                    Text("Extended").tag(DisplayMode.extended)
                 }
-            )) {
-                Text("Mirror").tag(DisplayMode.mirror)
-                Text("Extended").tag(DisplayMode.extended)
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .labelsHidden()
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
         }
 
+        // Boox: separate row when connected
         if hasBoox {
             Picker("Boox", selection: Binding(
                 get: { engine.booxResolution },
