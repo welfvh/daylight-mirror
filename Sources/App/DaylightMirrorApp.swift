@@ -635,20 +635,6 @@ struct MirrorMenuView: View {
         if hasDC1 {
             Divider()
 
-            // Backlight toggle above brightness/warmth sliders
-            HStack {
-                Label("Backlight", systemImage: "lightbulb")
-                    .font(.caption)
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { engine.backlightOn },
-                    set: { _ in engine.toggleBacklight() }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .labelsHidden()
-            }
-
             // Brightness slider (quadratic curve with widened low-end zone)
             HStack {
                 Image(systemName: "sun.min")
