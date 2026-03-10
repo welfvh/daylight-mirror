@@ -356,23 +356,6 @@
       gap: 20px;
     }
 
-    .brew-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px 20px;
-      display: inline-flex;
-      align-items: center;
-      gap: 14px;
-      font-size: 13px;
-    }
-
-    .brew-box code {
-      color: var(--text);
-    }
-
-    .brew-box .prompt { color: var(--accent); }
-
     .copy-btn {
       background: none;
       border: 1px solid var(--border);
@@ -573,12 +556,6 @@
 
       .gallery-grid img { height: 220px; }
 
-      .brew-box {
-        font-size: 11px;
-        padding: 10px 14px;
-        gap: 10px;
-      }
-
       .download-links { flex-direction: column; gap: 12px; }
 
       .evolution-table { font-size: 11px; }
@@ -594,7 +571,7 @@
 <body>
 
   <div class="top-banner">
-    Don't have a DC-1 yet? Use code <strong>MIRROR</strong> at <a href="https://buy.daylightcomputer.com/MIRROR">daylightcomputer.com</a>
+    Don't have a DC-1 yet? Use code <strong>MIRROR</strong> at <a href="https://buy.daylightcomputer.com/MIRROR">daylightcomputer.com</a> for $50 off
   </div>
 
   <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark mode">
@@ -611,7 +588,7 @@
 
       <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
         <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06" class="hero-cta">Download — $15 suggested</a>
-        <span style="color: var(--muted); font-size: 12px;">Pay what you want ($5+) · or <code style="color: var(--accent); font-size: 11px; background: var(--accent-dim); padding: 1px 5px; border-radius: 3px;">brew install welfvh/tap/daylight-mirror</code></span>
+        <span style="color: var(--muted); font-size: 12px;">Pay what you want ($5+)</span>
       </div>
       <img src="images/hero-daytime.jpg" alt="Daylight DC-1 mirroring a MacBook — both screens paper-like" class="hero-image">
     </div>
@@ -743,17 +720,11 @@
       <div class="section-label">Get Started</div>
       <h2>Download Daylight Mirror</h2>
       <p style="color: var(--muted); max-width: 480px; margin: 8px auto 0;">
-        macOS 14+. $15 suggested, pay what you want ($5+). Or just brew install it.
+        macOS 14+. $15 suggested, pay what you want ($5+).
       </p>
 
       <div class="download-actions">
         <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06" class="hero-cta">Download — $15 suggested</a>
-
-        <div class="brew-box">
-          <code><span class="prompt">$</span> brew install --cask welfvh/tap/daylight-mirror</code>
-          <button class="copy-btn" onclick="copyCmd(this, 'brew install --cask welfvh/tap/daylight-mirror')">copy</button>
-        </div>
-
       </div>
     </div>
   </section>
@@ -765,7 +736,7 @@
     <div class="content">
       <div class="section-label">Setup</div>
       <h2 style="text-align: center;">Up and running in 5 minutes</h2>
-      <p style="color: var(--muted); text-align: center; margin-bottom: 40px;">Homebrew handles most of this. If you downloaded the DMG, follow every step.</p>
+      <p style="color: var(--muted); text-align: center; margin-bottom: 40px;">Follow every step to get up and running.</p>
 
       <div class="setup-steps">
 
@@ -773,7 +744,7 @@
           <div class="step-number">1</div>
           <div class="step-content">
             <h3>Install ADB</h3>
-            <p>Required for USB communication with the Daylight. Homebrew installs this automatically with the cask.</p>
+            <p>Required for USB communication with the Daylight.</p>
             <div class="cmd-box">
               <code><span class="prompt">$</span> brew install android-platform-tools</code>
               <button class="copy-btn" onclick="copyCmd(this, 'brew install android-platform-tools')">copy</button>
@@ -810,12 +781,11 @@
           <div class="step-number">4</div>
           <div class="step-content">
             <h3>Install the Android app</h3>
-            <p>Push the companion app to your Daylight. The DMG includes the APK; Homebrew downloads it automatically.</p>
+            <p>Push the companion app to your Daylight. The DMG includes the APK.</p>
             <div class="cmd-box">
-              <code><span class="prompt">$</span> adb install /opt/homebrew/share/daylight-mirror/DaylightMirror.apk</code>
-              <button class="copy-btn" onclick="copyCmd(this, 'adb install /opt/homebrew/share/daylight-mirror/DaylightMirror.apk')">copy</button>
+              <code><span class="prompt">$</span> adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk</code>
+              <button class="copy-btn" onclick="copyCmd(this, 'adb install /Volumes/Daylight\\ Mirror/DaylightMirror.apk')">copy</button>
             </div>
-            <p class="step-note">DMG users: adb install /Volumes/Daylight\ Mirror/DaylightMirror.apk</p>
           </div>
         </div>
 
@@ -908,9 +878,8 @@
        ════════════════════════════════════════════════════════ -->
   <footer>
     <div class="content">
-      <p class="referral">Don't have a DC-1? Use code <strong>MIRROR</strong> at <a href="https://buy.daylightcomputer.com/MIRROR">daylightcomputer.com</a></p>
+      <p class="referral">Don't have a DC-1? Use code <strong>MIRROR</strong> at <a href="https://buy.daylightcomputer.com/MIRROR">daylightcomputer.com</a> for $50 off</p>
       <div class="footer-links">
-        <a href="https://github.com/welfvh/daylight-mirror">GitHub</a>
         <a href="https://buy.stripe.com/5kQ7sK1WGf64cFLbyq3Ru06">Buy</a>
         <a href="https://buy.daylightcomputer.com/MIRROR">Daylight Computer</a>
       </div>
@@ -920,7 +889,7 @@
   </footer>
 
   <!-- ════════════════════════════════════════════════════════
-       Clipboard JS — copy brew command
+       Clipboard JS — copy commands
        ════════════════════════════════════════════════════════ -->
   <script>
     function copyCmd(btn, text) {
