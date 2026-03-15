@@ -50,7 +50,7 @@ public class DeviceSession: Identifiable {
     }
 
     /// Start the full pipeline: virtual display → capture → TCP server → ADB tunnel → launch app.
-    func start(wsServer: WebSocketServer?, sharpenAmount: Double, contrastAmount: Double, gammaAmount: Double) async throws {
+    func start(wsServer: WebSocketServer?) async throws {
         let w = resolution.width
         let h = resolution.height
         let displayName = device.deviceFamily.rawValue
@@ -103,9 +103,6 @@ public class DeviceSession: Identifiable {
             targetDisplayID: displayManager!.displayID,
             width: Int(w), height: Int(h)
         )
-        cap.sharpenAmount = sharpenAmount
-        cap.contrastAmount = contrastAmount
-        cap.gammaAmount = gammaAmount
         cap.onStats = { [weak self] fps, bw, frameKB, total, grey, compress, jitter, skipped in
             guard let self else { return }
             self.fps = fps
@@ -193,21 +190,6 @@ public class DeviceSession: Identifiable {
         }
 
         NSLog("[Session:%@] Stopped", device.serial)
-    }
-
-    /// Update sharpen amount on the live capture stream.
-    func updateSharpen(_ amount: Double) {
-        capture?.sharpenAmount = amount
-    }
-
-    /// Update contrast amount on the live capture stream.
-    func updateContrast(_ amount: Double) {
-        capture?.contrastAmount = amount
-    }
-
-    /// Update gamma correction on the live capture stream.
-    func updateGamma(_ amount: Double) {
-        capture?.gammaAmount = amount
     }
 
     /// Restart the screen capture stream after a display sleep/wake cycle.

@@ -34,45 +34,12 @@ public class MirrorEngine: ObservableObject {
     @Published public var rttMs: Double = 0
     @Published public var rttP95Ms: Double = 0
     @Published public var skippedFrames: Int = 0
-    /// When true, slider changes are being applied by a profile — don't switch to Custom.
-    private var applyingProfile = false
-    @Published public var sharpenAmount: Double = 1.0 {
-        didSet {
-            for session in sessions { session.updateSharpen(sharpenAmount) }
-            UserDefaults.standard.set(sharpenAmount, forKey: "sharpenAmount")
-            if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
-        }
-    }
-    @Published public var contrastAmount: Double = 1.0 {
-        didSet {
-            for session in sessions { session.updateContrast(contrastAmount) }
-            UserDefaults.standard.set(contrastAmount, forKey: "contrastAmount")
-            if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
-        }
-    }
-    /// Gamma correction for reflective paper displays (~1.0-1.5 vs 2.2 for transmissive LCDs).
-    /// Values > 1.0 brighten midtones, improving definition on the DC-1's reflective panel.
-    @Published public var gammaAmount: Double = 1.2 {
-        didSet {
-            for session in sessions { session.updateGamma(gammaAmount) }
-            UserDefaults.standard.set(gammaAmount, forKey: "gammaAmount")
-            if !applyingProfile && displayProfile != .custom { displayProfile = .custom }
-        }
-    }
-    /// Display profile bundles sharpen+contrast+gamma. Selecting a preset applies its values;
-    /// manually adjusting any slider switches to "Custom".
-    @Published public var displayProfile: DisplayProfile = .crispPaper {
-        didSet {
-            UserDefaults.standard.set(displayProfile.rawValue, forKey: "displayProfile")
-            if displayProfile != .custom {
-                applyingProfile = true
-                sharpenAmount = displayProfile.sharpen
-                contrastAmount = displayProfile.contrast
-                gammaAmount = displayProfile.gamma
-                applyingProfile = false
-            }
-        }
-    }
+    // EXPERIMENT: sharpen/contrast/gamma disabled — sending raw BGRA to device.
+    // These properties kept as stubs so the UI compiles without changes.
+    @Published public var sharpenAmount: Double = 0
+    @Published public var contrastAmount: Double = 1.0
+    @Published public var gammaAmount: Double = 1.0
+    @Published public var displayProfile: DisplayProfile = .crispPaper
     @Published public var fontSmoothingDisabled: Bool = false
     @Published public var deviceDetected: Bool = false
     @Published public var updateVersion: String? = nil
@@ -143,24 +110,7 @@ public class MirrorEngine: ObservableObject {
         self.resolution = loadedRes
         let savedMode = UserDefaults.standard.string(forKey: "displayMode") ?? ""
         self.displayMode = DisplayMode(rawValue: savedMode) ?? .mirror
-        // Migration: v1.7 introduced new defaults (sharpen 1.5, contrast 1.2, gamma 1.2).
-        // Old installs have sharpen=1.0, contrast=1.0, gamma=0.0 saved — override those.
-        let migrated = UserDefaults.standard.bool(forKey: "v1.7_defaults_migrated")
-        if !migrated {
-            UserDefaults.standard.removeObject(forKey: "sharpenAmount")
-            UserDefaults.standard.removeObject(forKey: "contrastAmount")
-            UserDefaults.standard.removeObject(forKey: "gammaAmount")
-            UserDefaults.standard.removeObject(forKey: "displayProfile")
-            UserDefaults.standard.set(true, forKey: "v1.7_defaults_migrated")
-        }
-        let savedSharpen = UserDefaults.standard.double(forKey: "sharpenAmount")
-        self.sharpenAmount = savedSharpen > 0 ? savedSharpen : 1.5
-        let savedContrast = UserDefaults.standard.double(forKey: "contrastAmount")
-        self.contrastAmount = savedContrast > 0 ? savedContrast : 1.2
-        let savedGamma = UserDefaults.standard.double(forKey: "gammaAmount")
-        self.gammaAmount = savedGamma > 0 ? savedGamma : 1.2
-        let savedProfile = UserDefaults.standard.string(forKey: "displayProfile") ?? ""
-        self.displayProfile = DisplayProfile(rawValue: savedProfile) ?? .crispPaper
+        // EXPERIMENT: sharpen/contrast/gamma disabled — raw BGRA mode
         if UserDefaults.standard.object(forKey: "autoMirrorEnabled") != nil {
             self.autoMirrorEnabled = UserDefaults.standard.bool(forKey: "autoMirrorEnabled")
         }
@@ -418,12 +368,7 @@ public class MirrorEngine: ObservableObject {
         }
 
         do {
-            try await session.start(
-                wsServer: wsServer,
-                sharpenAmount: sharpenAmount,
-                contrastAmount: contrastAmount,
-                gammaAmount: gammaAmount
-            )
+            try await session.start(wsServer: wsServer)
         } catch {
             NSLog("[Engine] Session %@ failed: %@", session.device.serial, error.localizedDescription)
         }

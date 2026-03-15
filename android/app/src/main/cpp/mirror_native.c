@@ -1,8 +1,8 @@
 // mirror_native.c — Daylight Mirror native renderer.
 //
-// Receives LZ4+delta compressed greyscale frames over TCP,
-// decompresses, applies delta, and writes directly to ANativeWindow.
-// Entire hot path is C — no JNI calls, no Java GC, no GPU.
+// EXPERIMENT: Receives LZ4+delta compressed BGRA frames over TCP (4 bytes/pixel
+// instead of 1 byte greyscale). GPU shader does luminance conversion on-device.
+// Testing whether Mac-side greyscale conversion loses pixel richness.
 //
 // Protocol: [0xDA 0x7E] [flags:1B] [seq:4B LE] [length:4B LE] [LZ4 payload]
 //   flags bit 0: 1=keyframe, 0=delta (XOR with previous)
@@ -69,10 +69,11 @@ static uint32_t g_frame_h = DEFAULT_FRAME_H;
 static uint32_t g_surface_w = 0;
 static uint32_t g_surface_h = 0;
 static uint32_t g_pixel_count = DEFAULT_FRAME_W * DEFAULT_FRAME_H;
-static uint32_t g_max_compressed = DEFAULT_FRAME_W * DEFAULT_FRAME_H + (DEFAULT_FRAME_W * DEFAULT_FRAME_H / 255) + 1024;
+static uint32_t g_frame_size = DEFAULT_FRAME_W * DEFAULT_FRAME_H * 4;  // BGRA: 4 bytes/pixel
+static uint32_t g_max_compressed = DEFAULT_FRAME_W * DEFAULT_FRAME_H * 4 + (DEFAULT_FRAME_W * DEFAULT_FRAME_H * 4 / 255) + 1024;
 
 // Frame buffers (allocated once, reused — reallocated on resolution change)
-static uint8_t *g_current_frame = NULL;   // Decompressed greyscale pixels
+static uint8_t *g_current_frame = NULL;   // Decompressed BGRA pixels
 static uint8_t *g_compressed_buf = NULL;  // Incoming compressed data
 
 static pthread_mutex_t g_frame_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -129,19 +130,18 @@ static const char *k_vertex_shader_src =
     "    v_texcoord = a_texcoord;\n"
     "}\n";
 
-// Fragment shader — passthrough.  All image processing (greyscale, sharpen,
-// contrast, gamma) is done Mac-side in the combined LUT.  An earlier version
-// applied smoothstep(0.08, 0.92) here to snap antialiasing fringes to B/W,
-// but combined with the Mac-side gamma+contrast LUT it crushed light greys
-// (everything above ~200 became pure white) and dark greys (below ~30 became
-// pure black), destroying contrast discrimination.  The Mac LUT alone is
-// sufficient for text crispness; the shader should not double-process.
+// Fragment shader — BGRA luminance conversion on GPU.
+// EXPERIMENT: Mac sends raw BGRA, shader converts to greyscale using
+// BT.601 luminance weights (0.299R + 0.587G + 0.114B).
+// Texture is GL_RGBA so channels are R=B, G=G, B=R, A=A (BGRA→RGBA swizzle
+// happens at upload via GL_BGRA_EXT, so here r/g/b map correctly).
 static const char *k_fragment_shader_src =
     "precision mediump float;\n"
     "varying vec2 v_texcoord;\n"
     "uniform sampler2D u_texture;\n"
     "void main() {\n"
-    "    float grey = texture2D(u_texture, v_texcoord).r;\n"
+    "    vec4 color = texture2D(u_texture, v_texcoord);\n"
+    "    float grey = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;\n"
     "    gl_FragColor = vec4(grey, grey, grey, 1.0);\n"
     "}\n";
 
@@ -236,9 +236,9 @@ static int gl_create_texture(uint32_t width, uint32_t height) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, (GLsizei)width, (GLsizei)height,
-                 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)width, (GLsizei)height,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 
     if (glGetError() != GL_NO_ERROR) {
         LOGE("glTexImage2D failed for %ux%u", width, height);
@@ -422,11 +422,11 @@ static void apply_delta_neon(uint8_t *frame, const uint8_t *delta, int count) {
     }
 }
 
-// Write greyscale directly to ANativeWindow in R8_UNORM format (1 byte/pixel).
-// Falls back to RGBX expansion if R8 is not supported.
-static int g_r8_supported = 0;  // R8_UNORM not compositable by SurfaceFlinger on DC-1
+// CPU blit fallback: convert BGRA to greyscale RGBX in ANativeWindow.
+// Used when GL init fails. Converts on the fly using BT.601 weights.
+static int g_r8_supported = 0;  // unused in BGRA mode but kept for compat
 
-static void blit_grey_to_surface(ANativeWindow *window, const uint8_t *grey) {
+static void blit_bgra_to_surface(ANativeWindow *window, const uint8_t *bgra) {
     ANativeWindow_Buffer buffer;
     if (ANativeWindow_lock(window, &buffer, NULL) != 0) {
         LOGE("ANativeWindow_lock failed");
@@ -437,38 +437,20 @@ static void blit_grey_to_surface(ANativeWindow *window, const uint8_t *grey) {
     int fw = (int)g_frame_w;
     int fh = (int)g_frame_h;
 
-    if (g_r8_supported) {
-        if (buffer.stride == fw && fw <= buffer.width && fh <= buffer.height) {
-            memcpy(dst, grey, (size_t)fw * fh);
-        } else {
-            int dst_stride = buffer.stride;
-            for (int y = 0; y < fh && y < buffer.height; y++) {
-                int w = fw < buffer.width ? fw : buffer.width;
-                memcpy(dst + y * dst_stride, grey + y * fw, w);
-            }
-        }
-    } else {
-        // Fallback: RGBX_8888 (4 bytes per pixel) with NEON expansion
+    {
+        // RGBX_8888 (4 bytes per pixel) — convert BGRA to greyscale
         int dst_stride = buffer.stride * 4;
         for (int y = 0; y < fh && y < buffer.height; y++) {
             uint8_t *row = dst + y * dst_stride;
-            const uint8_t *src = grey + y * fw;
-            int x = 0;
-            for (; x + 16 <= fw && x + 16 <= buffer.width; x += 16) {
-                uint8x16_t g = vld1q_u8(src + x);
-                uint8x16_t ff = vdupq_n_u8(0xFF);
-                uint8x16x4_t rgbx;
-                rgbx.val[0] = g;
-                rgbx.val[1] = g;
-                rgbx.val[2] = g;
-                rgbx.val[3] = ff;
-                vst4q_u8(row + x * 4, rgbx);
-            }
-            for (; x < fw && x < buffer.width; x++) {
-                uint8_t v = src[x];
-                row[x * 4 + 0] = v;
-                row[x * 4 + 1] = v;
-                row[x * 4 + 2] = v;
+            const uint8_t *src = bgra + y * fw * 4;
+            for (int x = 0; x < fw && x < buffer.width; x++) {
+                uint8_t b = src[x * 4 + 0];
+                uint8_t g = src[x * 4 + 1];
+                uint8_t r = src[x * 4 + 2];
+                uint8_t grey = (uint8_t)((77 * r + 150 * g + 29 * b) >> 8);
+                row[x * 4 + 0] = grey;
+                row[x * 4 + 1] = grey;
+                row[x * 4 + 2] = grey;
                 row[x * 4 + 3] = 0xFF;
             }
         }
@@ -512,7 +494,7 @@ static void publish_frame(const uint8_t *frame, uint32_t seq) {
 
     const int write_index = (g_ready_index == 0) ? 1 : 0;
     if (g_render_frames[write_index]) {
-        memcpy(g_render_frames[write_index], frame, g_pixel_count);
+        memcpy(g_render_frames[write_index], frame, g_frame_size);
         if (g_has_ready_frame) g_overwritten_frames += 1;
         g_ready_index = write_index;
         g_ready_seq = seq;
@@ -524,15 +506,14 @@ static void publish_frame(const uint8_t *frame, uint32_t seq) {
 
 static int reallocate_buffers(uint32_t new_w, uint32_t new_h, uint8_t **decompress_buf) {
     uint32_t new_pixels = new_w * new_h;
-    // LZ4 worst-case: input_size + input_size/255 + 16. Use generous margin
-    // to handle incompressible frames (noisy screenshots, gradients, etc.).
-    uint32_t new_max_compressed = new_pixels + (new_pixels / 255) + 1024;
+    uint32_t new_frame_size = new_pixels * 4;  // BGRA: 4 bytes/pixel
+    uint32_t new_max_compressed = new_frame_size + (new_frame_size / 255) + 1024;
 
-    uint8_t *new_current = (uint8_t *)calloc(new_pixels, 1);
+    uint8_t *new_current = (uint8_t *)calloc(new_frame_size, 1);
     uint8_t *new_compressed = (uint8_t *)malloc(new_max_compressed);
-    uint8_t *new_decompress = (uint8_t *)malloc(new_pixels);
-    uint8_t *new_render0 = (uint8_t *)malloc(new_pixels);
-    uint8_t *new_render1 = (uint8_t *)malloc(new_pixels);
+    uint8_t *new_decompress = (uint8_t *)malloc(new_frame_size);
+    uint8_t *new_render0 = (uint8_t *)malloc(new_frame_size);
+    uint8_t *new_render1 = (uint8_t *)malloc(new_frame_size);
 
     if (!new_current || !new_compressed || !new_decompress || !new_render0 || !new_render1) {
         free(new_current);
@@ -555,14 +536,15 @@ static int reallocate_buffers(uint32_t new_w, uint32_t new_h, uint8_t **decompre
     *decompress_buf = new_decompress;
     g_render_frames[0] = new_render0;
     g_render_frames[1] = new_render1;
-    memset(g_render_frames[0], 0xFF, new_pixels);
-    memset(g_render_frames[1], 0xFF, new_pixels);
+    memset(g_render_frames[0], 0xFF, new_frame_size);
+    memset(g_render_frames[1], 0xFF, new_frame_size);
     g_ready_index = 0;
     g_has_ready_frame = 0;
 
     g_frame_w = new_w;
     g_frame_h = new_h;
     g_pixel_count = new_pixels;
+    g_frame_size = new_frame_size;
     g_max_compressed = new_max_compressed;
     pthread_mutex_unlock(&g_frame_mutex);
     return 1;
@@ -587,22 +569,22 @@ static void *render_thread(void *arg) {
         }
 
         const int frame_index = g_ready_index;
-        uint32_t local_pixels = g_pixel_count;
+        uint32_t local_frame_size = g_frame_size;
         render_w = g_frame_w;
         render_h = g_frame_h;
 
-        if (local_pixels > render_capacity) {
-            uint8_t *resized = (uint8_t *)realloc(render_local, local_pixels);
+        if (local_frame_size > render_capacity) {
+            uint8_t *resized = (uint8_t *)realloc(render_local, local_frame_size);
             if (!resized) {
                 g_has_ready_frame = 0;
                 pthread_mutex_unlock(&g_frame_mutex);
                 continue;
             }
             render_local = resized;
-            render_capacity = local_pixels;
+            render_capacity = local_frame_size;
         }
 
-        memcpy(render_local, g_render_frames[frame_index], local_pixels);
+        memcpy(render_local, g_render_frames[frame_index], local_frame_size);
         g_has_ready_frame = 0;
         pthread_mutex_unlock(&g_frame_mutex);
 
@@ -667,7 +649,7 @@ static void *render_thread(void *arg) {
                     clock_gettime(CLOCK_MONOTONIC, &t4a);
                     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
                                     (GLsizei)render_w, (GLsizei)render_h,
-                                    GL_LUMINANCE, GL_UNSIGNED_BYTE, render_local);
+                                    GL_RGBA, GL_UNSIGNED_BYTE, render_local);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
                     clock_gettime(CLOCK_MONOTONIC, &t4b);
 
@@ -697,15 +679,17 @@ static void *render_thread(void *arg) {
                     int cpu_need_rotation = (g_surface_w > 0 && cpu_frame_landscape != cpu_surface_landscape) ? 1 : 0;
 
                     if (cpu_need_rotation) {
-                        // 90° CW rotation: frame(x,y) → screen(fh-1-y, x)
-                        // Output dimensions: width=fh, height=fw
+                        // 90° CW rotation: frame(x,y) → screen(fh-1-y, x), BGRA→grey
                         int out_w = fh < nbuf.width ? fh : nbuf.width;
                         int out_h = fw < nbuf.height ? fw : nbuf.height;
                         for (int sy = 0; sy < out_h; sy++) {
                             uint8_t *row = dst + sy * dst_stride;
                             for (int sx = 0; sx < out_w; sx++) {
-                                // Screen (sx,sy) → frame (sy, fh-1-sx)
-                                uint8_t v = render_local[((fh - 1 - sx) * fw) + sy];
+                                int src_idx = ((fh - 1 - sx) * fw + sy) * 4;
+                                uint8_t b = render_local[src_idx + 0];
+                                uint8_t gg = render_local[src_idx + 1];
+                                uint8_t r = render_local[src_idx + 2];
+                                uint8_t v = (uint8_t)((77 * r + 150 * gg + 29 * b) >> 8);
                                 row[sx * 4 + 0] = v;
                                 row[sx * 4 + 1] = v;
                                 row[sx * 4 + 2] = v;
@@ -713,22 +697,15 @@ static void *render_thread(void *arg) {
                             }
                         }
                     } else {
+                        // BGRA → greyscale RGBX, no rotation
                         for (int y = 0; y < fh && y < nbuf.height; y++) {
                             uint8_t *row = dst + y * dst_stride;
-                            const uint8_t *row_src = render_local + y * fw;
-                            int x = 0;
-                            for (; x + 16 <= fw && x + 16 <= nbuf.width; x += 16) {
-                                uint8x16_t g = vld1q_u8(row_src + x);
-                                uint8x16_t ff = vdupq_n_u8(0xFF);
-                                uint8x16x4_t rgbx;
-                                rgbx.val[0] = g;
-                                rgbx.val[1] = g;
-                                rgbx.val[2] = g;
-                                rgbx.val[3] = ff;
-                                vst4q_u8(row + x * 4, rgbx);
-                            }
-                            for (; x < fw && x < nbuf.width; x++) {
-                                uint8_t v = row_src[x];
+                            const uint8_t *src = render_local + y * fw * 4;
+                            for (int x = 0; x < fw && x < nbuf.width; x++) {
+                                uint8_t b = src[x * 4 + 0];
+                                uint8_t gg = src[x * 4 + 1];
+                                uint8_t r = src[x * 4 + 2];
+                                uint8_t v = (uint8_t)((77 * r + 150 * gg + 29 * b) >> 8);
                                 row[x * 4 + 0] = v;
                                 row[x * 4 + 1] = v;
                                 row[x * 4 + 2] = v;
@@ -762,18 +739,18 @@ static void *decode_thread(void *arg) {
     (void)arg;
     LOGI("Decode thread started, connecting to %s:%d", g_host, g_port);
 
-    g_current_frame = (uint8_t *)calloc(g_pixel_count, 1);
+    g_current_frame = (uint8_t *)calloc(g_frame_size, 1);
     g_compressed_buf = (uint8_t *)malloc(g_max_compressed);
-    uint8_t *decompress_buf = (uint8_t *)malloc(g_pixel_count);
-    g_render_frames[0] = (uint8_t *)malloc(g_pixel_count);
-    g_render_frames[1] = (uint8_t *)malloc(g_pixel_count);
+    uint8_t *decompress_buf = (uint8_t *)malloc(g_frame_size);
+    g_render_frames[0] = (uint8_t *)malloc(g_frame_size);
+    g_render_frames[1] = (uint8_t *)malloc(g_frame_size);
 
     if (!g_current_frame || !g_compressed_buf || !decompress_buf || !g_render_frames[0] || !g_render_frames[1]) {
         LOGE("Failed to allocate buffers");
         goto cleanup;
     }
-    memset(g_render_frames[0], 0xFF, g_pixel_count);
-    memset(g_render_frames[1], 0xFF, g_pixel_count);
+    memset(g_render_frames[0], 0xFF, g_frame_size);
+    memset(g_render_frames[1], 0xFF, g_frame_size);
 
     while (g_running) {
         int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -926,22 +903,22 @@ static void *decode_thread(void *arg) {
                 (const char *)g_compressed_buf,
                 (char *)decompress_buf,
                 payload_len,
-                g_pixel_count
+                g_frame_size
             );
             clock_gettime(CLOCK_MONOTONIC, &t2);
 
-            if (decompressed_size != (int)g_pixel_count) {
-                LOGE("LZ4 decompress failed: got %d, expected %u", decompressed_size, g_pixel_count);
+            if (decompressed_size != (int)g_frame_size) {
+                LOGE("LZ4 decompress failed: got %d, expected %u", decompressed_size, g_frame_size);
                 if (flags & FLAG_KEYFRAME) break;
                 continue;
             }
 
             if (flags & FLAG_KEYFRAME) {
-                memcpy(g_current_frame, decompress_buf, g_pixel_count);
+                memcpy(g_current_frame, decompress_buf, g_frame_size);
             } else if (payload_len < 256) {
                 skipped_deltas += 1;
             } else {
-                apply_delta_neon(g_current_frame, decompress_buf, g_pixel_count);
+                apply_delta_neon(g_current_frame, decompress_buf, g_frame_size);
             }
             clock_gettime(CLOCK_MONOTONIC, &t3);
 
@@ -1006,7 +983,7 @@ static void *decode_thread(void *arg) {
         LOGI("Disconnected, reconnecting in 1s...");
 
         if (g_current_frame) {
-            memset(g_current_frame, 0xFF, g_pixel_count);
+            memset(g_current_frame, 0xFF, g_frame_size);
             publish_frame(g_current_frame, g_ready_seq + 1);
         }
 

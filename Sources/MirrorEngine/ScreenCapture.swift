@@ -58,17 +58,14 @@ class ScreenCapture: NSObject {
     private var cgHandle: UnsafeMutableRawPointer?       // dlopen handle
     private(set) var displayStream: OpaquePointer?         // retained stream ref
 
-    var currentGray: UnsafeMutablePointer<UInt8>?
-    var previousGray: UnsafeMutablePointer<UInt8>?
+    // EXPERIMENT: Send raw BGRA (4 bytes/pixel) instead of greyscale (1 byte/pixel).
+    // Hypothesis: Mac-side greyscale conversion loses pixel richness that the DC-1's
+    // RLCD panel could render better if the GPU shader handles luminance conversion.
+    var currentFrame: UnsafeMutablePointer<UInt8>?
+    var previousFrame: UnsafeMutablePointer<UInt8>?
     var deltaBuffer: UnsafeMutablePointer<UInt8>?
     var compressedBuffer: UnsafeMutablePointer<CChar>?
-    var sharpenTemp: UnsafeMutablePointer<UInt8>?  // Pre-sharpen greyscale buffer
-    var contrastLUT: [UInt8] = Array(0...255)       // Combined gamma+contrast LUT
-    var lastContrastAmount: Double = 1.0           // Tracks when to rebuild LUT
-    var lastGammaAmount: Double = 1.0              // Tracks when to rebuild LUT
-    var sharpenAmount: Double = 1.0                // 0=none, 1=mild, 2=strong, 3=max
-    var contrastAmount: Double = 1.0               // 1.0=off, >1=enhanced
-    var gammaAmount: Double = 1.2                  // Gamma correction for reflective displays
+    var frameBufferSize: Int = 0  // pixelCount * 4 (BGRA)
     /// Atomic flag to prevent handleFrame() from accessing deallocated buffers during stop().
     /// Set before CGDisplayStreamStop, checked at top of handleFrame().
     private var isStopped: Bool = false
@@ -119,14 +116,14 @@ class ScreenCapture: NSObject {
         frameWidth = expectedWidth
         frameHeight = expectedHeight
         pixelCount = frameWidth * frameHeight
+        frameBufferSize = pixelCount * 4  // BGRA: 4 bytes per pixel
 
-        currentGray = .allocate(capacity: pixelCount)
-        previousGray = .allocate(capacity: pixelCount)
-        deltaBuffer = .allocate(capacity: pixelCount)
-        sharpenTemp = .allocate(capacity: pixelCount)
-        let maxCompressed = LZ4_compressBound(Int32(pixelCount))
+        currentFrame = .allocate(capacity: frameBufferSize)
+        previousFrame = .allocate(capacity: frameBufferSize)
+        deltaBuffer = .allocate(capacity: frameBufferSize)
+        let maxCompressed = LZ4_compressBound(Int32(frameBufferSize))
         compressedBuffer = .allocate(capacity: Int(maxCompressed))
-        previousGray!.initialize(repeating: 0, count: pixelCount)
+        previousFrame!.initialize(repeating: 0, count: frameBufferSize)
 
         print("Capturing display: \(expectedWidth)x\(expectedHeight) pixels (ID: \(targetDisplayID))")
 
@@ -211,10 +208,9 @@ class ScreenCapture: NSObject {
             dlclose(cg)
             cgHandle = nil
         }
-        currentGray?.deallocate(); currentGray = nil
-        previousGray?.deallocate(); previousGray = nil
+        currentFrame?.deallocate(); currentFrame = nil
+        previousFrame?.deallocate(); previousFrame = nil
         deltaBuffer?.deallocate(); deltaBuffer = nil
-        sharpenTemp?.deallocate(); sharpenTemp = nil
         compressedBuffer?.deallocate(); compressedBuffer = nil
     }
 
@@ -343,92 +339,28 @@ class ScreenCapture: NSObject {
         let baseAddress = IOSurfaceGetBaseAddress(surface)
         let rowBytes = IOSurfaceGetBytesPerRow(surface)
 
-        // Log actual IOSurface dimensions on first frame to verify CGDisplayStream
-        // is delivering full backing pixel resolution (critical for HiDPI modes).
+        // Log actual IOSurface dimensions on first frame
         if frameCount == 0 {
             let surfW = IOSurfaceGetWidth(surface)
             let surfH = IOSurfaceGetHeight(surface)
             let surfBPP = IOSurfaceGetBytesPerElement(surface)
+            NSLog("[Capture] EXPERIMENT: raw BGRA mode — no greyscale conversion")
             NSLog("[Capture] IOSurface: %dx%d, %d bpp, rowBytes=%d (expected %dx%d)",
                   surfW, surfH, surfBPP, rowBytes, frameWidth, frameHeight)
         }
 
-        var srcBuffer = vImage_Buffer(
-            data: baseAddress,
-            height: vImagePixelCount(frameHeight),
-            width: vImagePixelCount(frameWidth),
-            rowBytes: rowBytes
-        )
-
-        var matrix: [Int16] = [29, 150, 77, 0]
-        let greyDivisor: Int32 = 256
-        var preBias: [Int16] = [0, 0, 0, 0]
-
-        let sharpAmt = sharpenAmount
-        let contrastAmt = contrastAmount
-
-        if sharpAmt > 0.01 {
-            // Greyscale → sharpenTemp, then Laplacian convolve → currentGray
-            // Kernel: [0, -a, 0; -a, 1+4a, -a; 0, -a, 0] with divisor to allow fractional a.
-            // Use divisor=4 for 0.25 step granularity.
-            var preSharpenBuffer = vImage_Buffer(
-                data: sharpenTemp!, height: vImagePixelCount(frameHeight),
-                width: vImagePixelCount(frameWidth), rowBytes: frameWidth
-            )
-            vImageMatrixMultiply_ARGB8888ToPlanar8(
-                &srcBuffer, &preSharpenBuffer, &matrix, greyDivisor, &preBias, 0,
-                vImage_Flags(kvImageNoFlags)
-            )
-            var dstBuffer = vImage_Buffer(
-                data: currentGray!, height: vImagePixelCount(frameHeight),
-                width: vImagePixelCount(frameWidth), rowBytes: frameWidth
-            )
-            let a = Int16(sharpAmt * 4)  // scale by divisor=4
-            let center = 4 + 4 * a       // (1 + 4*amount) * divisor = 4 + 4*a
-            var kernel: [Int16] = [0, -a, 0, -a, center, -a, 0, -a, 0]
-            vImageConvolve_Planar8(
-                &preSharpenBuffer, &dstBuffer, nil, 0, 0,
-                &kernel, 3, 3, 4, 0, vImage_Flags(kvImageEdgeExtend)
-            )
+        // Copy raw BGRA directly — no greyscale conversion, no sharpen, no LUT.
+        // The Android GPU shader will handle luminance conversion.
+        let srcPtr = baseAddress.assumingMemoryBound(to: UInt8.self)
+        let expectedRowBytes = frameWidth * 4
+        if rowBytes == expectedRowBytes {
+            // Contiguous — single memcpy
+            memcpy(currentFrame!, srcPtr, frameBufferSize)
         } else {
-            // No sharpening — greyscale directly into currentGray
-            var dstBuffer = vImage_Buffer(
-                data: currentGray!, height: vImagePixelCount(frameHeight),
-                width: vImagePixelCount(frameWidth), rowBytes: frameWidth
-            )
-            vImageMatrixMultiply_ARGB8888ToPlanar8(
-                &srcBuffer, &dstBuffer, &matrix, greyDivisor, &preBias, 0,
-                vImage_Flags(kvImageNoFlags)
-            )
-        }
-
-        // Combined gamma + contrast enhancement via single precomputed LUT.
-        // Gamma correction adjusts midtones for the reflective paper display
-        // (transfer curve ~1.0-1.5 vs 2.2 for transmissive LCDs).
-        // Contrast stretch pushes light borders darker and dark text blacker.
-        // LUT rebuilt lazily on capture thread to avoid data race with main thread.
-        let gammaAmt = gammaAmount
-        // Combined gamma + contrast enhancement via single precomputed LUT.
-        // Active when either gamma or contrast differs from 1.0 (identity).
-        let needsLUT = abs(contrastAmt - 1.0) > 0.01 || abs(gammaAmt - 1.0) > 0.01
-        if needsLUT {
-            if contrastAmt != lastContrastAmount || gammaAmt != lastGammaAmount {
-                contrastLUT = (0..<256).map { i in
-                    var val = Double(i) / 255.0
-                    if abs(gammaAmt - 1.0) > 0.01 {
-                        val = pow(val, 1.0 / gammaAmt)
-                    }
-                    val = val * 255.0
-                    if abs(contrastAmt - 1.0) > 0.01 {
-                        val = 128.0 + contrastAmt * (val - 128.0)
-                    }
-                    return UInt8(max(0, min(255, Int(val))))
-                }
-                lastContrastAmount = contrastAmt
-                lastGammaAmount = gammaAmt
+            // IOSurface may have padding per row — copy row by row
+            for y in 0..<frameHeight {
+                memcpy(currentFrame! + y * expectedRowBytes, srcPtr + y * rowBytes, expectedRowBytes)
             }
-            let lut = contrastLUT
-            for i in 0..<pixelCount { currentGray![i] = lut[Int(currentGray![i])] }
         }
 
         let t1 = CACurrentMediaTime()
@@ -442,10 +374,9 @@ class ScreenCapture: NSObject {
         if inflight > adaptiveThreshold && !isScheduledKeyframe {
             skippedFrames += 1
             forceNextKeyframe = true
-            // Still swap buffers so currentGray stays fresh for next delta base
-            let temp = previousGray
-            previousGray = currentGray
-            currentGray = temp
+            let temp = previousFrame
+            previousFrame = currentFrame
+            currentFrame = temp
 
             IOSurfaceUnlock(surface, .readOnly, nil)
             frameCount += 1
@@ -459,24 +390,23 @@ class ScreenCapture: NSObject {
 
         if isKeyframe {
             let compressedSize = LZ4_compress_default(
-                currentGray!, compressedBuffer!, Int32(pixelCount),
-                LZ4_compressBound(Int32(pixelCount))
+                currentFrame!, compressedBuffer!, Int32(frameBufferSize),
+                LZ4_compressBound(Int32(frameBufferSize))
             )
             let payload = Data(bytes: compressedBuffer!, count: Int(compressedSize))
             tcpServer.broadcast(payload: payload, isKeyframe: true, sequenceNumber: seq)
             lastCompressedSize = Int(compressedSize)
         } else {
-            for i in 0..<pixelCount {
-                deltaBuffer![i] = currentGray![i] ^ previousGray![i]
+            for i in 0..<frameBufferSize {
+                deltaBuffer![i] = currentFrame![i] ^ previousFrame![i]
             }
             let compressedSize = LZ4_compress_default(
-                deltaBuffer!, compressedBuffer!, Int32(pixelCount),
-                LZ4_compressBound(Int32(pixelCount))
+                deltaBuffer!, compressedBuffer!, Int32(frameBufferSize),
+                LZ4_compressBound(Int32(frameBufferSize))
             )
-            // Skip trivial deltas — screen barely changed, Android already has the frame
             if compressedSize < TRIVIAL_DELTA_THRESHOLD {
                 skippedFrames += 1
-                frameSequence &-= 1  // reclaim sequence number
+                frameSequence &-= 1
             } else {
                 let payload = Data(bytes: compressedBuffer!, count: Int(compressedSize))
                 tcpServer.broadcast(payload: payload, isKeyframe: false, sequenceNumber: seq)
@@ -484,9 +414,9 @@ class ScreenCapture: NSObject {
             lastCompressedSize = Int(compressedSize)
         }
 
-        let temp = previousGray
-        previousGray = currentGray
-        currentGray = temp
+        let temp = previousFrame
+        previousFrame = currentFrame
+        currentFrame = temp
 
         let t2 = CACurrentMediaTime()
 

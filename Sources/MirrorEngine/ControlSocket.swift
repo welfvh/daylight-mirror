@@ -236,26 +236,10 @@ public class ControlSocket {
             }
 
         case "SHARPEN":
-            if let arg = parts.dropFirst().first {
-                guard let val = Double(arg), val >= 0, val <= 3.0 else {
-                    return "ERR value must be 0.0-3.0 (0=none, 1=mild, 2=strong)"
-                }
-                engine.sharpenAmount = val
-                return "OK \(String(format: "%.1f", val))"
-            } else {
-                return "OK \(String(format: "%.1f", engine.sharpenAmount))"
-            }
+            return "DISABLED — raw BGRA experiment, no Mac-side processing"
 
         case "CONTRAST":
-            if let arg = parts.dropFirst().first {
-                guard let val = Double(arg), val >= 1.0, val <= 2.0 else {
-                    return "ERR value must be 1.0-2.0 (1.0=off, 1.5=moderate, 2.0=high)"
-                }
-                engine.contrastAmount = val
-                return "OK \(String(format: "%.1f", val))"
-            } else {
-                return "OK \(String(format: "%.1f", engine.contrastAmount))"
-            }
+            return "DISABLED — raw BGRA experiment, no Mac-side processing"
 
         case "DISPLAYMODE":
             if let arg = arg?.lowercased() {
@@ -346,10 +330,7 @@ public class ControlSocket {
                 "version=\(MirrorEngine.appVersion)",
                 "resolution=\(engine.resolution.label)",
                 "display_mode=\(engine.displayMode.rawValue)",
-                "profile=\(engine.displayProfile.rawValue)",
-                "sharpen=\(String(format: "%.1f", engine.sharpenAmount))",
-                "contrast=\(String(format: "%.1f", engine.contrastAmount))",
-                "gamma=\(String(format: "%.1f", engine.gammaAmount))",
+                "mode=raw_bgra_experiment",
                 "fps=\(String(format: "%.1f", engine.fps))",
                 "clients=\(engine.clientCount)",
                 "total_frames=\(engine.totalFrames)",
