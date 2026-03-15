@@ -63,6 +63,11 @@ public class DeviceSession: Identifiable {
         if displayMode == .mirror {
             displayManager?.mirrorBuiltInDisplay()
         } else {
+            // macOS may auto-mirror the new virtual display with the built-in.
+            // Explicitly break any mirror relationship first, then position side-by-side.
+            displayManager?.unmirrorBuiltInDisplay()
+            try? await Task.sleep(for: .milliseconds(500))
+            displayManager?.positionNextToBuiltIn()
             NSLog("[Session:%@] Extended display mode — second screen", device.serial)
         }
         try? await Task.sleep(for: .seconds(1))
