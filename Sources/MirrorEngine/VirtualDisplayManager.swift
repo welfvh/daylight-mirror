@@ -60,6 +60,38 @@ class VirtualDisplayManager {
         print("Virtual display configured: \(width)x\(height) \(modeLabel) @ 60Hz")
     }
 
+    /// Position this virtual display to the right of the built-in display,
+    /// so they don't overlap. Used in extend mode.
+    func positionNextToBuiltIn() {
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayIDs, &displayCount)
+
+        var builtInID: CGDirectDisplayID?
+        for i in 0..<Int(displayCount) {
+            if CGDisplayIsBuiltin(displayIDs[i]) != 0 {
+                builtInID = displayIDs[i]
+                break
+            }
+        }
+
+        guard let masterID = builtInID else { return }
+
+        let builtInBounds = CGDisplayBounds(masterID)
+        let originX = Int32(builtInBounds.origin.x + builtInBounds.size.width)
+        let originY = Int32(builtInBounds.origin.y)
+
+        var configRef: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&configRef) == .success, let config = configRef else { return }
+
+        // Ensure built-in stays at (0,0) — this keeps it as the primary/main display.
+        // macOS treats the display at origin (0,0) as the primary (menu bar + dock).
+        CGConfigureDisplayOrigin(config, masterID, 0, 0)
+        CGConfigureDisplayOrigin(config, displayID, originX, originY)
+
+        guard CGCompleteDisplayConfiguration(config, .forSession) == .success else { return }
+    }
+
     func mirrorBuiltInDisplay() {
         var displayIDs = [CGDirectDisplayID](repeating: 0, count: 32)
         var displayCount: UInt32 = 0
